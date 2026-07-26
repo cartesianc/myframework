@@ -1,0 +1,98 @@
+cabal-version: 3.0
+name: myframework
+version: 0.1.0.0
+synopsis: Recursive CURDE framework compiler and runtime
+description:
+  Serializable CURDE authoring, recursive AST interpretation, runtime control,
+  diagnosis, TrustBase evidence, and SDK lowering.
+license: BSD-3-Clause
+license-file: LICENSE
+author: cartesianc
+maintainer: cartesianc
+category: Language
+build-type: Simple
+
+library
+  hs-source-dirs: src
+  exposed-modules:
+      MyFramework
+      MyFramework.Ast
+      MyFramework.Ast.Layout
+      MyFramework.CURDE
+      MyFramework.CURDE.Evidence
+      MyFramework.CURDE.Record
+      MyFramework.Handler
+      MyFramework.Legacy.Migration
+      MyFramework.Runtime
+      MyFramework.Runtime.Diagnosis
+      MyFramework.SDK.SourceArtifact
+      MyFramework.TrustBase.Evidence
+      MyFramework.TrustBase.FixedPoint
+      MyFramework.TrustBase.Manifest
+      MyFramework.TrustBase.Types
+  other-modules:
+      MyFramework.Control
+      MyFramework.CURDE.Core
+      MyFramework.CURDE.Expression
+      MyFramework.CURDE.Lowering
+      MyFramework.CURDE.Types
+      MyFramework.CURDE.Validate
+      MyFramework.Recursion
+      MyFramework.Runtime.Branch
+      MyFramework.Runtime.Cancellation
+      MyFramework.Runtime.Concurrent
+      MyFramework.Runtime.Control
+      MyFramework.Runtime.Demand
+      MyFramework.Runtime.Demand.Control
+      MyFramework.Runtime.Demand.Delta
+      MyFramework.Runtime.Expression
+      MyFramework.Runtime.Observation
+      MyFramework.Runtime.State
+      MyFramework.Runtime.Types
+      MyFramework.Runtime.Value
+  default-language: Haskell2010
+  build-depends:
+      base >=4.18 && <5
+    , containers
+  ghc-options:
+      -Wall
+      -Wcompat
+      -Widentities
+      -Wincomplete-record-updates
+      -Wincomplete-uni-patterns
+      -Wmissing-export-lists
+      -Wmissing-home-modules
+      -Wpartial-fields
+      -Wredundant-constraints
+
+executable curde-semantics-witness
+  hs-source-dirs: app
+  main-is: CurdeSemanticsWitness.hs
+  default-language: Haskell2010
+  build-depends:
+      base >=4.18 && <5
+    , myframework
+  ghc-options:
+      -Wall
+      -Wcompat
+      -Widentities
+      -Wincomplete-record-updates
+      -Wincomplete-uni-patterns
+      -Wmissing-export-lists
+      -Wpartial-fields
+      -Wredundant-constraints
+
+executable curde-runtime-witness
+  hs-source-dirs: app
+  main-is: CurdeRuntimeWitness.hs
+  default-language: Haskell2010
+  build-depends:
+      base >=4.18 && <5
+    , myframework
+  ghc-options:
+      -Wall
+      -threaded
+
+source-repository head
+  type: git
+  location: https://github.com/cartesianc/myframework.git

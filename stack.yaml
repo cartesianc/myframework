@@ -1,0 +1,5 @@
+snapshot: ghc-9.6.7
+packages:
+  - .
+ghc-options:
+  "$everything": -fwrite-ide-info
