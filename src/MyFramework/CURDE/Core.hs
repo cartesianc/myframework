@@ -106,7 +106,6 @@ data DemandEdge = DemandEdge
 
 data RootDemandKind
   = BootRoot
-  | HangingRoot
   deriving (Eq, Ord, Show)
 
 data RootDemand = RootDemand

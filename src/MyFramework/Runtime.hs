@@ -5,7 +5,6 @@ module MyFramework.Runtime
   , ControlValidationError (..)
   , prepareRuntime
   , runtimeProgramLayout
-  , runtimeProgramHangingCount
   , RuntimeHooks (..)
   , RuntimeAction
   , runtimeAction
@@ -28,12 +27,9 @@ module MyFramework.Runtime
   , controlResultDiagnostics
   , controlResultSucceeded
   , DiagnosisResult
-  , PureOperator (..)
-  , PureOperatorRegistry
   , RExprEvaluationError (..)
-  , emptyPureOperatorRegistry
-  , pureOperatorRegistry
-  , registerPureOperator
+  , BootRunId (..)
+  , ExecutionProvenance (..)
   , CommitState (..)
   , FailurePhase (..)
   , RuntimeFailure (..)
@@ -53,7 +49,6 @@ module MyFramework.Runtime
 
 import MyFramework.Ast
   ( AstPath
-  , ContextRef
   , MiddlewareRef
   )
 import MyFramework.Ast.Layout
@@ -116,12 +111,7 @@ import MyFramework.Runtime.Diagnosis
   , diagnoseFailedDemands
   )
 import MyFramework.Runtime.Expression
-  ( PureOperator (..)
-  , PureOperatorRegistry
-  , RExprEvaluationError (..)
-  , emptyPureOperatorRegistry
-  , pureOperatorRegistry
-  , registerPureOperator
+  ( RExprEvaluationError (..)
   )
 import MyFramework.Runtime.State
   ( RuntimeEvent (..)
@@ -133,10 +123,13 @@ import MyFramework.Runtime.State
   , validityFor
   )
 import MyFramework.Runtime.Types
-  ( ExecutionStatus (..)
+  ( BootRunId (..)
+  , ExecutionProvenance (..)
+  , ExecutionStatus (..)
   , ImplementationStatus (..)
   , ReadStatus (..)
   , Validity (..)
+  , newBootRunId
   )
 import MyFramework.Runtime.Value
   ( RuntimeData (..)
@@ -180,9 +173,6 @@ prepareRuntime currentLowering =
     currentCore =
       loweringCore currentLowering
 
-runtimeProgramHangingCount :: RuntimeProgram -> Int
-runtimeProgramHangingCount =
-  length . controlPlanHanging . programControlPlan
 
 -- | A wrapped Control action keeps the public hook API from exposing or
 -- replacing the runtime's demand callback.
@@ -256,8 +246,7 @@ data RuntimeLoopPolicy = RuntimeLoopPolicy
 -- | Runtime-only control implementations. No defaults are supplied: an
 -- explicit control node cannot silently degrade into a no-op.
 data RuntimeHooks = RuntimeHooks
-  { runtimeHookOperators :: PureOperatorRegistry
-  , runtimeHookWait ::
+  { runtimeHookWait ::
       AstPath ->
       StatusPlan ->
       BranchSnapshot ->
@@ -277,11 +266,6 @@ data RuntimeHooks = RuntimeHooks
       AstPath ->
       RuntimeAction ->
       RuntimeAction
-  , runtimeHookContext ::
-      ContextRef ->
-      AstPath ->
-      RuntimeAction ->
-      RuntimeAction
   , runtimeHookLoop ::
       AstPath ->
       RuntimeLoopPolicy
@@ -294,19 +278,19 @@ data RuntimeRun = RuntimeRun
   }
   deriving (Eq, Show)
 
--- | Run only the compiled boot tree. Every call creates a fresh coordinator;
--- hanging trees remain inert metadata. Diagnosis is computed as a pure overlay
--- from the final immutable snapshot.
+-- | Run the single compiled boot tree. Every call creates a fresh coordinator.
+-- Diagnosis is computed as a pure overlay from the final immutable snapshot.
 runRuntimeProgram ::
   RuntimeProgram ->
   HandlerRegistry ->
   RuntimeHooks ->
   IO RuntimeRun
 runRuntimeProgram currentProgram currentHandlers currentHooks = do
+  currentBootRun <- newBootRunId
   currentSession <-
     newDemandSession
+      currentBootRun
       currentHandlers
-      (runtimeHookOperators currentHooks)
       (programGraph currentProgram)
   initialSnapshot <-
     snapshotDemandSession currentSession
@@ -368,15 +352,6 @@ controlRegistry currentSession currentHooks =
             ( runtimeHookCallback
                 currentHooks
                 currentHandle
-                currentPath
-                (runtimeAction currentChild)
-            )
-    , controlContextCallback =
-        \currentRef currentPath currentChild ->
-          runRuntimeAction
-            ( runtimeHookContext
-                currentHooks
-                currentRef
                 currentPath
                 (runtimeAction currentChild)
             )

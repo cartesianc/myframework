@@ -37,12 +37,10 @@ import MyFramework.Recursion
   , cata
   )
 
--- | Static control metadata. Only 'controlPlanBoot' is the boot root.
--- Hanging trees remain addressable metadata for later listeners or runtime
--- installation; compiling the plan does not start them.
+-- | Executable control metadata contains exactly one validated boot root.
+-- Unfrozen hanging roots never enter this projection.
 data ControlPlan = ControlPlan
   { controlPlanBoot :: ControlTree
-  , controlPlanHanging :: [ControlTree]
   }
   deriving (Eq, Show)
 
@@ -67,7 +65,6 @@ data ControlNode
   | ControlMiddleware MiddlewareRef ControlTree
   | ControlCallback HandleId ControlTree
   | ControlSuspense HandleId
-  | ControlContext ContextRef ControlTree
   deriving (Eq, Show)
 
 data StatusPlan
@@ -100,6 +97,8 @@ data ControlValidationError
   | ControlSuspenseHandleUnresolved AstPath HandleRef
   | ControlDuplicateChoiceKey AstPath ChoiceKey
   | ControlSelectedChoiceMissing AstPath ChoiceKey [ChoiceKey]
+  | ControlUnsupportedContext AstPath
+  | ControlUnsupportedHanging AstPath
   | ControlPlanTreeUnavailable AstPath
   deriving (Eq, Ord, Show)
 
@@ -130,23 +129,20 @@ data StatusBuild = StatusBuild
 compileControlPlan ::
   CURDECore ->
   Either [ControlValidationError] ControlPlan
-compileControlPlan currentCore =
-  case semanticErrors of
-    [] ->
-      case
-          ( controlBuildTree bootBuild
-          , traverse controlBuildTree hangingBuilds
-          ) of
-        (Just currentBoot, Just currentHanging) ->
+compileControlPlan currentCore
+  | not (null hangingErrors) =
+      Left (sortErrors hangingErrors)
+  | not (null bootErrors) =
+      Left (sortErrors bootErrors)
+  | otherwise =
+      case controlBuildTree bootBuild of
+        Just currentBoot ->
           Right
             ControlPlan
               { controlPlanBoot = currentBoot
-              , controlPlanHanging = currentHanging
               }
-        _ ->
-          Left (sortErrors unavailableErrors)
-    _ ->
-      Left semanticErrors
+        Nothing ->
+          Left [ControlPlanTreeUnavailable bootPath]
   where
     currentBlueprint =
       curdeCoreAst currentCore
@@ -165,36 +161,19 @@ compileControlPlan currentCore =
         currentEnvironment
         bootPath
         (astBlueprintBoot currentBlueprint)
-    hangingBuilds =
-      [ compileOne
-          currentEnvironment
-          (hangingPath currentIndexValue)
-          currentTree
-      | (currentIndexValue, currentTree) <-
+    bootErrors =
+      controlBuildErrors bootBuild
+    hangingErrors =
+      [ ControlUnsupportedHanging
+          ( AstPath
+              [ "blueprint"
+              , "hanging"
+              , "item:" ++ show currentIndexValue
+              ]
+          )
+      | (currentIndexValue, _) <-
           indexedItems (astBlueprintHanging currentBlueprint)
       ]
-    semanticErrors =
-      sortErrors
-        ( controlBuildErrors bootBuild
-            ++ concatMap controlBuildErrors hangingBuilds
-        )
-    unavailableErrors =
-      [ ControlPlanTreeUnavailable bootPath
-      | controlBuildTree bootBuild == Nothing
-      ]
-        ++ [ ControlPlanTreeUnavailable
-               (hangingPath currentIndexValue)
-           | (currentIndexValue, currentBuild) <-
-               indexedItems hangingBuilds
-           , controlBuildTree currentBuild == Nothing
-           ]
-    hangingPath currentIndexValue =
-      AstPath
-        [ "blueprint"
-        , "hanging"
-        , "item:" ++ show currentIndexValue
-        ]
-
 compileOne ::
   ControlEnvironment ->
   AstPath ->
@@ -328,14 +307,8 @@ controlAlgebra currentLayer currentEnvironment currentPath =
           successfulBuild
             currentPath
             (ControlSuspense currentHandle)
-    Context currentContext child ->
-      buildWrapped
-        currentPath
-        (ControlContext currentContext)
-        ( child
-            currentEnvironment
-            (appendAstPath currentPath "body")
-        )
+    Context _ _ ->
+      failedBuild (ControlUnsupportedContext currentPath)
   where
     currentHandles =
       controlHandleIndex currentEnvironment

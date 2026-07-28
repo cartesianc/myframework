@@ -24,8 +24,10 @@ status. A successful handler may also produce a private observation.
 
 `R` declares a lazy typed value. Its source is its single input's observation
 or R value, or a runtime Handler environment. A serializable `RExpr` supplies
-Implementation arguments from typed R references, literals, closed
-records/products, field projections, and registered pure operators.
+Implementation arguments only from typed R references, literals, and closed
+records/products. Business data transformations are explicit R Facts with
+registered R handlers; there is no executable operator registry outside the
+Effect System.
 
 Every fact has at most one explicit input. A declared input is a real semantic
 dependency and the handler must consume the input handle or state.
@@ -84,6 +86,11 @@ The current recursion kernel provides `Fix` and `cata`. Serializable frontend
 records lower explicitly into the internal fixed point. Layout, path,
 dependency, and validation projections fold that fixed point.
 
+`Context` remains a versioned serializable AST constructor, but its semantics
+are not frozen: lowering and the internal Control compiler reject it. Likewise,
+`astBlueprintSeedHanging` must be empty. Hanging roots and Context never enter
+the executable Control plan, demand graph, runtime layout, or diagnosis.
+
 Coalgebra-based unfolds and refolds such as `ana` and `hylo` are deliberately
 reserved for the later JSON-RPC boot framework.
 
@@ -93,7 +100,14 @@ runtime history.
 
 ## Runtime
 
-The runtime starts deterministically and does not automatically replay CURDE:
+The runtime starts deterministically and does not automatically replay CURDE.
+A validated boot `ControlDemand` is the only authority source: it mints an
+internal execution permit containing `BootRunId`, `AstPath`, and the root
+`DemandNodeId`. Every actual handler invocation requires that permit and emits
+an authorization event containing the provenance, actual demand node, and
+handle identity. Registration alone never grants execution authority.
+
+The executable control behavior is:
 
 - Chain executes in order.
 - Parallel isolates branches and merges state conservatively.

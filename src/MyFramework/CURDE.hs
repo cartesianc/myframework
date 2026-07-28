@@ -61,22 +61,17 @@ module MyFramework.CURDE
   , EffectSystemDecl (..)
   , eraseEffectSystem
   , effectSystemDeclHandleIds
-  , OperatorRef (..)
   , LiteralValue (..)
   , FieldExpr (..)
   , RExpr
   , RExprDecl (..)
-  , SomeRExpr (..)
   , rRef
   , literal
   , productRecord
-  , project
-  , applyOperator
   , rExprSchemaRef
   , rExprSchemaIdentity
   , rExprHandleReferences
   , eraseRExpr
-  , eraseSomeRExpr
   , rExprDeclSchemaIdentity
   , rExprDeclHandleReferences
   , Implementation
@@ -128,16 +123,12 @@ import MyFramework.CURDE.Expression
   , Implementation
   , ImplementationDecl (..)
   , LiteralValue (..)
-  , OperatorRef (..)
   , RExpr
   , RExprDecl (..)
   , SomeImplementation (..)
-  , SomeRExpr (..)
-  , applyOperator
   , eraseImplementation
   , eraseRExpr
   , eraseSomeImplementation
-  , eraseSomeRExpr
   , implC
   , implD
   , implE
@@ -146,7 +137,6 @@ import MyFramework.CURDE.Expression
   , implementationDeclTargetId
   , literal
   , productRecord
-  , project
   , rExprDeclHandleReferences
   , rExprDeclSchemaIdentity
   , rExprHandleReferences

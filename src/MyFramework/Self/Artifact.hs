@@ -147,6 +147,7 @@ artifactSourceFiles =
   , "src/MyFramework/CURDE/Types.hs"
   , "src/MyFramework/CURDE/Validate.hs"
   , "src/MyFramework/Handler.hs"
+  , "src/MyFramework/Handler/Internal.hs"
   , "src/MyFramework/Legacy/Migration.hs"
   , "src/MyFramework/Recursion.hs"
   , "src/MyFramework/Runtime.hs"
@@ -183,6 +184,7 @@ trustedSeedFiles :: [FilePath]
 trustedSeedFiles =
   [ "app/SelfArtifactTool.hs"
   , "src/MyFramework/Handler.hs"
+  , "src/MyFramework/Handler/Internal.hs"
   , "src/MyFramework/Recursion.hs"
   , "src/MyFramework/Runtime.hs"
   , "src/MyFramework/Runtime/Branch.hs"

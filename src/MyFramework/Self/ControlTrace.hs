@@ -19,7 +19,6 @@ import Numeric
 import MyFramework.Ast
   ( AstPath (..)
   , ChoiceKey (..)
-  , ContextRef (..)
   , MiddlewareRef (..)
   , renderAstPath
   )
@@ -75,7 +74,6 @@ controlNodeCatalog =
   , "Middleware"
   , "Callback"
   , "Suspense"
-  , "Context"
   ]
 
 compileControlTrace :: SelfModel -> Either ControlTraceError ControlTrace
@@ -103,7 +101,6 @@ compileControlTrace currentModel
 renderPlanLines :: ControlPlan -> [String]
 renderPlanLines currentPlan =
   renderTree (controlPlanBoot currentPlan)
-    ++ concatMap renderTree (controlPlanHanging currentPlan)
 
 renderTree :: ControlTree -> [String]
 renderTree currentTree =
@@ -136,7 +133,6 @@ controlNodeTag currentNode =
     ControlMiddleware _ _ -> "Middleware"
     ControlCallback _ _ -> "Callback"
     ControlSuspense _ -> "Suspense"
-    ControlContext _ _ -> "Context"
 
 controlNodePayload :: ControlNode -> String
 controlNodePayload currentNode =
@@ -170,8 +166,6 @@ controlNodePayload currentNode =
       renderHandleId currentHandle
     ControlSuspense currentHandle ->
       renderHandleId currentHandle
-    ControlContext currentContext _ ->
-      contextRefText currentContext
 
 controlNodeChildren :: ControlNode -> [ControlTree]
 controlNodeChildren currentNode =
@@ -188,7 +182,6 @@ controlNodeChildren currentNode =
     ControlMiddleware _ currentChild -> [currentChild]
     ControlCallback _ currentChild -> [currentChild]
     ControlSuspense _ -> []
-    ControlContext _ currentChild -> [currentChild]
 
 renderStatusPlan :: StatusPlan -> String
 renderStatusPlan currentStatus =
@@ -228,7 +221,7 @@ controlTraceConstructorChecks =
 
 controlNodeChildArities :: [Int]
 controlNodeChildArities =
-  [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1]
+  [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]
 
 controlNodeSpecimens :: [ControlNode]
 controlNodeSpecimens =
@@ -246,7 +239,6 @@ controlNodeSpecimens =
   , ControlMiddleware (MiddlewareRef "middleware") sampleChild
   , ControlCallback sampleHandle sampleChild
   , ControlSuspense sampleHandle
-  , ControlContext (ContextRef "context") sampleChild
   ]
 
 sampleSystem :: EffectSystemName

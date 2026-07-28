@@ -12,6 +12,7 @@ module MyFramework.Runtime.State
   , readStatusFor
   , readStatuses
   , readValueFor
+  , recordHandlerInvocation
   , recordObservationCaptured
   , recordObservationUnavailable
   , recordReadFailure
@@ -31,7 +32,9 @@ import Data.Map.Strict
 import qualified Data.Map.Strict as Map
 
 import MyFramework.CURDE.Core
-  ( ImplementationId )
+  ( DemandNodeId
+  , ImplementationId
+  )
 import MyFramework.CURDE.Types
   ( HandleId )
 import MyFramework.Runtime.Types
@@ -48,6 +51,10 @@ data RuntimeEvent
   | ReadValueAvailable HandleId
   | RuntimeObservationCaptured HandleId
   | RuntimeObservationUnavailable HandleId RuntimeFailure
+  | HandlerInvocationAuthorized
+      ExecutionProvenance
+      DemandNodeId
+      HandleId
   deriving (Eq, Show)
 
 data RuntimeState = RuntimeState
@@ -285,6 +292,16 @@ recordReadFailure currentId currentFailure =
 recordObservationCaptured :: HandleId -> RuntimeState -> RuntimeState
 recordObservationCaptured currentId =
   appendEvent (RuntimeObservationCaptured currentId)
+
+recordHandlerInvocation ::
+  ExecutionProvenance ->
+  DemandNodeId ->
+  HandleId ->
+  RuntimeState ->
+  RuntimeState
+recordHandlerInvocation currentProvenance currentNode currentHandle =
+  appendEvent
+    (HandlerInvocationAuthorized currentProvenance currentNode currentHandle)
 
 recordObservationUnavailable ::
   HandleId ->

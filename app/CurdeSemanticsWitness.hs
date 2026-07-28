@@ -80,8 +80,8 @@ main =
           observedClaims =
             map curdeClaimEvidenceName dischargedEvidence
           exactManifest =
-            length (claimCatalogCoreClaims currentCatalog) == 20
-              && length expectedClaims == 21
+            length (claimCatalogCoreClaims currentCatalog) == 21
+              && length expectedClaims == 22
               && observedClaims == expectedClaims
           curdeRoundTrip =
             roundTrip ([C, U, R, D, E] :: [CURDE])
@@ -246,7 +246,7 @@ renderReportJson
             [ ("catalog", jsonString (claimCatalogName (curdeSemanticsReportCatalog currentReport)))
             , ("coreCount", show (length (claimCatalogCoreClaims (curdeSemanticsReportCatalog currentReport))))
             , ("totalCount", show (length currentEvidence))
-            , ("exact20Plus1", jsonBool exactManifest)
+            , ("exact21Plus1", jsonBool exactManifest)
             ]
         )
       , ("claims", jsonArray (map renderEvidenceJson currentEvidence))

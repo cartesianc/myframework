@@ -166,7 +166,7 @@ data MigrationIssueCode
   | MissingTransformSignature
   | AmbiguousTransformSignature
   | TransformChainSchemaMismatch
-  | TransformRequiresPureOperator
+  | TransformRequiresReadFact
   | CommandKindDefaultedToE
   | PolicyRequiresHandlerDecision
   | AmbiguousPolicyDeclaration
@@ -234,7 +234,7 @@ data MigrationPlanStep
   -- occurrence index keeps repeated uses distinct under stable de-duplication.
   | PlanAtomicEHandle String Int PlannedCommand
   | PlanRHandle PlannedRead
-  | PlanPureOperator LegacyTransformDescriptor
+  | PlanReadFact LegacyTransformDescriptor
   | PlanImplementation String String String PlannedRExpr
   | PlanHandlerBinding String String
   deriving (Eq, Ord, Read, Show)
@@ -371,7 +371,7 @@ migrationIssueCodeText currentCode =
     MissingTransformSignature -> "missing-transform-signature"
     AmbiguousTransformSignature -> "ambiguous-transform-signature"
     TransformChainSchemaMismatch -> "transform-chain-schema-mismatch"
-    TransformRequiresPureOperator -> "transform-requires-pure-operator"
+    TransformRequiresReadFact -> "transform-requires-read-fact"
     CommandKindDefaultedToE -> "command-kind-defaulted-to-e"
     PolicyRequiresHandlerDecision -> "policy-requires-handler-decision"
     AmbiguousPolicyDeclaration -> "ambiguous-policy-declaration"
@@ -640,7 +640,7 @@ globalPlanSteps currentDescriptor =
           == 1
       ]
     operatorSteps =
-      [ PlanPureOperator (normalizeTransformForPlan currentTransform)
+      [ PlanReadFact (normalizeTransformForPlan currentTransform)
       | currentTransform <- legacyEffectTransforms currentDescriptor
       , length
           ( transformsNamed
@@ -1211,9 +1211,9 @@ factIssues currentDescriptor currentFact =
     transformWarnings =
       [ migrationIssue
           MigrationWarning
-          TransformRequiresPureOperator
+          TransformRequiresReadFact
           currentName
-          ( "transform is planned only as a registered pure RExpr operator: "
+          ( "transform is planned as an explicit R Fact handler: "
               ++ currentTransform
           )
       | currentTransform <- legacyFactTransforms currentFact

@@ -79,7 +79,6 @@ data ValidationError
   | ImplementationKindMismatch AstPath HandleId CURDE CURDE
   | ImplementationSchemaMismatch AstPath HandleId SchemaIdentity SchemaIdentity
   | ImplementationReadNotVisible AstPath HandleId HandleId
-  | EmptyOperatorReference AstPath FieldPath
   | DuplicateExpressionField AstPath FieldPath FieldName
   | ExpressionReferenceSchemaMismatch
       AstPath
@@ -96,6 +95,8 @@ data ValidationError
   | DemandGraphUnknownNode DemandNodeId
   | DemandCycle [DemandNodeId]
   | UnconsumedRead HandleId
+  | UnsupportedContextNode AstPath
+  | UnsupportedHangingRoot AstPath
   deriving (Eq, Ord, Show)
 
 sortValidationErrors :: [ValidationError] -> [ValidationError]
@@ -645,36 +646,9 @@ validateRExprDecl
                 currentValue
             | (currentName, currentValue) <- currentFields
             ]
-      RProjectionDecl currentOperator currentSchema currentSource ->
-        validateOperator currentOperator
-          ++ validateSchema currentSchema
-          ++ validateRExprDecl
-            handleIndex
-            systemIndex
-            targetId
-            currentPath
-            (appendFieldPath currentFieldPath "source")
-            currentSource
-      ROperatorDecl currentOperator currentSchema currentArguments ->
-        validateOperator currentOperator
-          ++ validateSchema currentSchema
-          ++ concat
-            [ validateRExprDecl
-                handleIndex
-                systemIndex
-                targetId
-                currentPath
-                (appendFieldPath currentFieldPath ("argument:" ++ show currentIndex))
-                currentArgument
-            | (currentIndex, currentArgument) <- indexedItems currentArguments
-            ]
   where
     validateSchema currentSchema =
       [EmptySchemaName currentSchema | null (schemaIdentityName currentSchema)]
-    validateOperator currentOperator =
-      [ EmptyOperatorReference currentPath currentFieldPath
-      | null (operatorRefName currentOperator)
-      ]
     validateReference currentHandle declaredSchema =
       case Map.lookup currentHandle handleIndex of
         Nothing ->
@@ -841,9 +815,6 @@ duplicates currentItems =
   | currentItem : _ : _ <- group (sort currentItems)
   ]
 
-indexedItems :: [item] -> [(Int, item)]
-indexedItems =
-  zip [0 ..]
 
 maybeToList :: Maybe item -> [item]
 maybeToList currentValue =

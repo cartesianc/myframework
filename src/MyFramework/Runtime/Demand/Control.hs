@@ -14,9 +14,13 @@ import MyFramework.Runtime.Control
   )
 import MyFramework.Runtime.Demand
   ( DemandSession
+  , demandSessionBootRunId
   , demandInSession
-  , forkDemandSessionFrom
+  , forkDemandSessionFromAuthorized
   , snapshotDemandSession
+  )
+import MyFramework.Runtime.Types
+  ( mintExecutionPermit
   )
 
 -- | Replace only Control's demand callback. All other control behavior
@@ -40,8 +44,16 @@ controlDemandAction ::
   BranchSnapshot ->
   IO ControlResult
 controlDemandAction currentSession currentInvocation currentSnapshot = do
+  let currentPermit =
+        mintExecutionPermit
+          (demandSessionBootRunId currentSession)
+          (demandInvocationPath currentInvocation)
+          (demandInvocationNode currentInvocation)
   currentBranch <-
-    forkDemandSessionFrom currentSession currentSnapshot
+    forkDemandSessionFromAuthorized
+      currentPermit
+      currentSession
+      currentSnapshot
   currentOutcome <-
     demandInSession
       currentBranch

@@ -171,6 +171,7 @@ curdeSemanticsClaimCatalog =
           , "curde-public-facade-boundary"
           , "curde-runtime-observation-read-history"
           , "curde-runtime-control-parity"
+          , "curde-runtime-ast-execution-provenance"
           ]
     , claimCatalogManifestClaim =
         ClaimName "curde-semantics-claim-manifest"
@@ -566,6 +567,10 @@ curdeSemanticsReport currentSystems currentSeed =
           "curde-runtime-control-parity"
           RuntimeControlWitness
           "runtime evidence must prove control-node behavior, cancellation settlement, shared identity/single-flight, and no automatic retry"
+      , deferredClaim
+          "curde-runtime-ast-execution-provenance"
+          RuntimeControlWitness
+          "runtime evidence must prove every handler invocation is authorized by one ControlDemand provenance and unreachable registrations remain unused"
       ]
 
 completeClaimEvidence ::
@@ -661,7 +666,7 @@ blueprintLayoutModels currentLayout =
 
 controlPlanTrees :: ControlPlan -> [ControlTree]
 controlPlanTrees currentPlan =
-  controlPlanBoot currentPlan : controlPlanHanging currentPlan
+  [controlPlanBoot currentPlan]
 
 controlTreePaths :: ControlTree -> [AstPath]
 controlTreePaths currentTree =
@@ -721,7 +726,6 @@ controlChildren currentNode =
     ControlMiddleware _ currentChild -> [currentChild]
     ControlCallback _ currentChild -> [currentChild]
     ControlSuspense _ -> []
-    ControlContext _ currentChild -> [currentChild]
 
 expectedArgumentUses ::
   [ImplementationDecl] ->
@@ -837,7 +841,6 @@ isImplementationSchemaError currentError =
     ImplementationSchemaMismatch _ _ _ _ -> True
     ExpressionReferenceSchemaMismatch _ _ _ _ _ -> True
     PublicStatusUsedAsValue _ _ _ _ -> True
-    EmptyOperatorReference _ _ -> True
     DuplicateExpressionField _ _ _ -> True
     _ -> False
 
@@ -949,6 +952,7 @@ allowedDeferredNames =
     , "curde-public-facade-boundary"
     , "curde-runtime-observation-read-history"
     , "curde-runtime-control-parity"
+    , "curde-runtime-ast-execution-provenance"
     ]
 
 claimSlots :: CURDESemanticsReport -> [ClaimSlot]

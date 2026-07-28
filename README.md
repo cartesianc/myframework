@@ -40,7 +40,9 @@ all pass before release validation starts.
 Promotion is still deliberately separate from validation. A candidate is not
 the current core until the heavy self-artifact gate passes and a maintainer
 explicitly approves its pending promotion record. Only that approved core may
-feed the beta SDK workflow.
+feed the beta SDK workflow. Ordinary architecture changes, including the AST
+execution-boundary work in the current worktree, invalidate previous source
+digests and are not promoted merely because local semantic witnesses pass.
 
 The repository current pointer now selects the explicitly approved `core1`;
 the retained `core0` manifest is archival/rollback evidence and is not an
@@ -56,6 +58,7 @@ self-artifact promotion gates are not part of ordinary iteration.
 stack --work-dir .stack-work-codex build
 stack --work-dir .stack-work-codex exec curde-semantics-witness
 stack --work-dir .stack-work-codex exec curde-runtime-witness
+.\scripts\check-ast-execution-boundary.ps1
 ```
 
 See `docs/ARCHITECTURE.md` for the frozen semantic boundary.

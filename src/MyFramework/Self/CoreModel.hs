@@ -426,14 +426,12 @@ frameworkCompileToken currentFramework =
       Left currentError ->
         Left
           (frameworkReadFailure ("cata control compile failed: " ++ show currentError))
-      Right currentProgram ->
+      Right _ ->
         Right
           ( sha256
               ( "cata:"
                   ++ show
                     (frameworkAsBusinessAstSeed currentFramework)
-                  ++ ":hanging="
-                  ++ show (runtimeProgramHangingCount currentProgram)
               )
           )
 
@@ -478,8 +476,7 @@ semanticObservationDigest currentFramework currentStatus =
 frameworkRuntimeHooks :: RuntimeHooks
 frameworkRuntimeHooks =
   RuntimeHooks
-    { runtimeHookOperators = emptyPureOperatorRegistry
-    , runtimeHookWait =
+    { runtimeHookWait =
         \_ _ currentSnapshot ->
           pure (RuntimeGateReady currentSnapshot)
     , runtimeHookSuspense =
@@ -488,8 +485,6 @@ frameworkRuntimeHooks =
     , runtimeHookMiddleware =
         \_ _ currentAction -> currentAction
     , runtimeHookCallback =
-        \_ _ currentAction -> currentAction
-    , runtimeHookContext =
         \_ _ currentAction -> currentAction
     , runtimeHookLoop =
         \_ ->

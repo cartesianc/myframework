@@ -1,9 +1,10 @@
 module MyFramework.Runtime.Demand
   ( DemandSession
+  , demandSessionBootRunId
   , demandInSession
-  , demandRootInSession
   , forkDemandSession
   , forkDemandSessionFrom
+  , forkDemandSessionFromAuthorized
   , newDemandSession
   , newDemandSessionFrom
   , replaceDemandSessionSnapshot
@@ -49,7 +50,7 @@ import MyFramework.CURDE.Types
   , SchemaIdentity
   , renderHandleId
   )
-import MyFramework.Handler
+import MyFramework.Handler.Internal
   ( CudeInvocation (..)
   , HandlerRegistry
   , ObservationCapture (..)
@@ -66,8 +67,7 @@ import MyFramework.Runtime.Demand.Delta
   , projectHandleActionDelta
   )
 import MyFramework.Runtime.Expression
-  ( PureOperatorRegistry
-  , RExprEvaluationError
+  ( RExprEvaluationError
   , interpretRExprDecl
   )
 import MyFramework.Runtime.Observation
@@ -86,6 +86,7 @@ import MyFramework.Runtime.State
   , putReadValue
   , readStatusFor
   , readValueFor
+  , recordHandlerInvocation
   , recordObservationCaptured
   , recordObservationUnavailable
   , recordReadFailure
@@ -102,7 +103,6 @@ import MyFramework.Runtime.Value
 data DemandContext = DemandContext
   { contextGraph :: DemandGraph
   , contextHandlers :: HandlerRegistry
-  , contextOperators :: PureOperatorRegistry
   }
 
 newtype DemandCoordinator = DemandCoordinator
@@ -114,6 +114,8 @@ data DemandSession = DemandSession
   { demandSessionContext :: DemandContext
   , demandSessionCoordinator :: DemandCoordinator
   , demandSessionSnapshot :: MVar BranchSnapshot
+  , demandSessionBootRunId :: BootRunId
+  , demandSessionExecutionPermit :: Maybe ExecutionPermit
   }
 
 data HandleFlight = HandleFlight
@@ -139,14 +141,14 @@ data TargetPreparation
 -- | Start one boot run. Every call creates a fresh HandleId coordinator, so
 -- completed actions never leak into a later boot.
 newDemandSession ::
+  BootRunId ->
   HandlerRegistry ->
-  PureOperatorRegistry ->
   DemandGraph ->
   IO DemandSession
-newDemandSession currentHandlers currentOperators currentGraph =
+newDemandSession currentBootRun currentHandlers currentGraph =
   newDemandSessionFrom
+    currentBootRun
     currentHandlers
-    currentOperators
     currentGraph
     BranchSnapshot
       { branchRuntimeState = emptyRuntimeState
@@ -154,14 +156,14 @@ newDemandSession currentHandlers currentOperators currentGraph =
       }
 
 newDemandSessionFrom ::
+  BootRunId ->
   HandlerRegistry ->
-  PureOperatorRegistry ->
   DemandGraph ->
   BranchSnapshot ->
   IO DemandSession
 newDemandSessionFrom
+  currentBootRun
   currentHandlers
-  currentOperators
   currentGraph
   currentSnapshot = do
     currentState <- newMVar currentSnapshot
@@ -173,10 +175,11 @@ newDemandSessionFrom
             DemandContext
               { contextGraph = currentGraph
               , contextHandlers = currentHandlers
-              , contextOperators = currentOperators
               }
         , demandSessionCoordinator = currentCoordinator
         , demandSessionSnapshot = currentState
+        , demandSessionBootRunId = currentBootRun
+        , demandSessionExecutionPermit = Nothing
         }
 
 -- | Forks copy RuntimeState and ObservationStore into a new mutable cell.
@@ -200,6 +203,23 @@ forkDemandSessionFrom currentSession currentSnapshot = do
       , demandSessionCoordinator =
           demandSessionCoordinator currentSession
       , demandSessionSnapshot = currentState
+      , demandSessionBootRunId =
+          demandSessionBootRunId currentSession
+      , demandSessionExecutionPermit =
+          demandSessionExecutionPermit currentSession
+      }
+
+forkDemandSessionFromAuthorized ::
+  ExecutionPermit ->
+  DemandSession ->
+  BranchSnapshot ->
+  IO DemandSession
+forkDemandSessionFromAuthorized currentPermit currentSession currentSnapshot = do
+  nextSession <-
+    forkDemandSessionFrom currentSession currentSnapshot
+  pure
+    nextSession
+      { demandSessionExecutionPermit = Just currentPermit
       }
 
 snapshotDemandSession :: DemandSession -> IO BranchSnapshot
@@ -219,17 +239,18 @@ demandInSession ::
   DemandSession ->
   DemandNodeId ->
   IO (Either RuntimeFailure ())
-demandInSession =
-  demandNode
+demandInSession currentSession currentNode =
+  case demandSessionExecutionPermit currentSession of
+    Nothing ->
+      pure
+        ( Left
+            ( invariantFailure
+                "demand evaluation requires AST execution provenance"
+            )
+        )
+    Just _ ->
+      demandNode currentSession currentNode
 
--- | Evaluate one explicitly selected root. There is no all-roots runner;
--- hanging roots remain inert until Control or a listener selects one.
-demandRootInSession ::
-  DemandSession ->
-  RootDemand ->
-  IO (Either RuntimeFailure ())
-demandRootInSession currentSession =
-  demandInSession currentSession . rootDemandNode
 
 demandNode ::
   DemandSession ->
@@ -562,7 +583,6 @@ evaluateImplementation
         currentEvaluation <-
           tryRExprEvaluation
             ( interpretRExprDecl
-                (contextOperators (demandSessionContext currentSession))
                 ( expressionBindings
                     (branchRuntimeState currentSnapshot)
                     (implementationArguments currentImplementation)
@@ -914,22 +934,32 @@ evaluateReadSourceAction currentSession currentRead = do
             ("R handle has no read source: " ++ renderHandleId currentId)
         )
     Just ReadFromHandler -> do
-      currentInvocation <-
-        invokeRead currentHandlers currentId currentInput
-      case currentInvocation of
-        ReadInvocationSucceeded currentValue ->
-          publishReadValue currentSession currentRead currentValue
-        ReadInvocationSourceRequired currentSource ->
-          failRead currentSession currentId
-            ( invariantFailure
-                ( "registered R handler unexpectedly requires source "
-                    ++ show currentSource
-                    ++ ": "
-                    ++ renderHandleId currentId
-                )
-            )
-        ReadInvocationFailed currentFailure ->
+      case executionPermitFor currentSession of
+        Left currentFailure ->
           failRead currentSession currentId currentFailure
+        Right currentPermit -> do
+          modifyRuntimeState currentSession
+            ( recordHandlerInvocation
+                (executionPermitProvenance currentPermit)
+                (HandleNode currentId)
+                currentId
+            )
+          currentInvocation <-
+            invokeRead currentPermit currentHandlers currentId currentInput
+          case currentInvocation of
+            ReadInvocationSucceeded currentValue ->
+              publishReadValue currentSession currentRead currentValue
+            ReadInvocationSourceRequired currentSource ->
+              failRead currentSession currentId
+                ( invariantFailure
+                    ( "registered R handler unexpectedly requires source "
+                        ++ show currentSource
+                        ++ ": "
+                        ++ renderHandleId currentId
+                    )
+                )
+            ReadInvocationFailed currentFailure ->
+              failRead currentSession currentId currentFailure
     Just ReadFromInputValue ->
       case handleDeclInput currentRead of
         Nothing ->
@@ -1064,30 +1094,56 @@ invokeCommandAction currentSession currentHandle currentArguments = do
         handlerInputFor
           (handleDeclInput currentHandle)
           (branchRuntimeState currentSnapshot)
-  currentInvocation <-
-    invokeCude
-      (contextHandlers (demandSessionContext currentSession))
-      currentId
-      currentInput
-      currentArguments
-  case currentInvocation of
-    CudeInvocationFailed currentFailure -> do
+  case executionPermitFor currentSession of
+    Left currentFailure -> do
       modifyRuntimeState currentSession
         (setExecutionFailure currentId currentFailure)
       pure (Left currentFailure)
-    CudeInvocationSucceeded currentCapture -> do
-      -- CUDE settlement becomes terminal before private observation
-      -- processing. Capture failure cannot overwrite this success.
+    Right currentPermit -> do
       modifyRuntimeState currentSession
-        (setExecutionStatus currentId ExecutionSucceeded)
-      recordObservationCapture
-        currentSession
-        currentHandle
-        currentCapture
-      pure (Right ())
+        ( recordHandlerInvocation
+            (executionPermitProvenance currentPermit)
+            (HandleNode currentId)
+            currentId
+        )
+      currentInvocation <-
+        invokeCude
+          currentPermit
+          (contextHandlers (demandSessionContext currentSession))
+          currentId
+          currentInput
+          currentArguments
+      case currentInvocation of
+        CudeInvocationFailed currentFailure -> do
+          modifyRuntimeState currentSession
+            (setExecutionFailure currentId currentFailure)
+          pure (Left currentFailure)
+        CudeInvocationSucceeded currentCapture -> do
+          -- CUDE settlement becomes terminal before private observation
+          -- processing. Capture failure cannot overwrite this success.
+          modifyRuntimeState currentSession
+            (setExecutionStatus currentId ExecutionSucceeded)
+          recordObservationCapture
+            currentSession
+            currentHandle
+            currentCapture
+          pure (Right ())
   where
     currentId =
       handleDeclId currentHandle
+
+executionPermitFor ::
+  DemandSession ->
+  Either RuntimeFailure ExecutionPermit
+executionPermitFor currentSession =
+  case demandSessionExecutionPermit currentSession of
+    Nothing ->
+      Left
+        ( invariantFailure
+            "handler invocation requires AST execution provenance"
+        )
+    Just currentPermit ->
+      Right currentPermit
 
 recordObservationCapture ::
   DemandSession ->
@@ -1278,10 +1334,6 @@ expressionReferences currentExpression =
       concatMap
         (expressionReferences . snd)
         currentFields
-    RProjectionDecl _ _ currentSource ->
-      expressionReferences currentSource
-    ROperatorDecl _ _ currentArguments ->
-      concatMap expressionReferences currentArguments
 
 uniqueReferences ::
   [(HandleId, SchemaIdentity)] ->

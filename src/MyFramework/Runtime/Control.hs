@@ -33,7 +33,6 @@ import qualified Data.Map.Strict as Map
 import MyFramework.Ast
   ( AstPath
   , ChoiceKey
-  , ContextRef
   , MiddlewareRef
   )
 import MyFramework.Control
@@ -177,11 +176,6 @@ data ControlRegistry = ControlRegistry
       ControlAction
   , controlCallbackCallback ::
       HandleId ->
-      AstPath ->
-      ControlAction ->
-      ControlAction
-  , controlContextCallback ::
-      ContextRef ->
       AstPath ->
       ControlAction ->
       ControlAction
@@ -455,8 +449,7 @@ controlResultSucceeded currentResult =
     _ ->
       False
 
--- | Interpret only the boot root. Hanging trees remain metadata and require
--- an explicit caller invocation through 'runControlTree'.
+-- | Interpret the single validated boot root.
 runControlPlan ::
   ControlRegistry ->
   ControlPlan ->
@@ -586,17 +579,6 @@ runTree currentRegistry currentScope currentTree currentSnapshot =
         currentPath
         currentHandle
         currentSnapshot
-    ControlContext currentContext child ->
-      runWrappedRegistry
-        currentPath
-        "context"
-        currentSnapshot
-        ( controlContextCallback
-            currentRegistry
-            currentContext
-            currentPath
-            (runTree currentRegistry currentScope child)
-        )
   where
     currentPath =
       controlTreePath currentTree

@@ -249,7 +249,7 @@ lowerAstBlueprint ::
   AstBlueprint ->
   AstSummary
 lowerAstBlueprint currentEnvironment currentBlueprint =
-  combineAstSummaries (bootSummary : hangingSummaries)
+  addErrors hangingErrors bootSummary
   where
     bootSummary =
       lowerOneAst
@@ -258,14 +258,10 @@ lowerAstBlueprint currentEnvironment currentBlueprint =
         Map.empty
         (AstPath ["blueprint", "boot"])
         (astBlueprintBoot currentBlueprint)
-    hangingSummaries =
-      [ lowerOneAst
-          currentEnvironment
-          HangingRoot
-          Map.empty
+    hangingErrors =
+      [ UnsupportedHangingRoot
           (AstPath ["blueprint", "hanging", "item:" ++ show currentIndex])
-          currentAst
-      | (currentIndex, currentAst) <-
+      | (currentIndex, _) <-
           indexedItems (astBlueprintHanging currentBlueprint)
       ]
 
@@ -367,8 +363,10 @@ astLoweringAlgebra
             addErrors [currentError] emptyAstSummary
           Right _ ->
             emptyAstSummary
-      Context _ child ->
-        child currentKind currentBindings (appendAstPath currentPath "body")
+      Context _ _ ->
+        addErrors
+          [UnsupportedContextNode currentPath]
+          emptyAstSummary
   where
     lowerIndexedChildren currentPrefix children =
       combineAstSummaries

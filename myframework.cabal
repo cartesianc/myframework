@@ -47,6 +47,7 @@ library
       MyFramework.CURDE.Lowering
       MyFramework.CURDE.Types
       MyFramework.CURDE.Validate
+      MyFramework.Handler.Internal
       MyFramework.Runtime.Branch
       MyFramework.Runtime.Cancellation
       MyFramework.Runtime.Concurrent

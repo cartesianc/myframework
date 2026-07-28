@@ -81,6 +81,9 @@ main = do
                   , renderRuntimeClaim
                       succeeded
                       "curde-runtime-control-parity"
+                  , renderRuntimeClaim
+                      succeeded
+                      "curde-runtime-ast-execution-provenance"
                   ]
               )
             , ("checks", jsonArray (map renderCheck orderedChecks))
@@ -96,7 +99,7 @@ runAllScenarios = do
   inputProofChecks <- runInputProofRejection
   safeFallbackChecks <- runSafeFallback
   unsafeFallbackChecks <- runUnsafeFallback
-  controlChecks <- runControlAndHanging
+  controlChecks <- runControlAndUnfrozenRejection
   raceChecks <- runRaceSettlement
   pure
     ( goodChecks
@@ -191,11 +194,10 @@ prepareProgram ::
 prepareProgram currentSystems currentBlueprint =
   prepareRuntime (lowerCURDE currentSystems currentBlueprint)
 
-plainHooks :: PureOperatorRegistry -> RuntimeHooks
-plainHooks currentOperators =
+plainHooks :: RuntimeHooks
+plainHooks =
   RuntimeHooks
-    { runtimeHookOperators = currentOperators
-    , runtimeHookWait =
+    { runtimeHookWait =
         \_ _ currentSnapshot ->
           pure (RuntimeGateReady currentSnapshot)
     , runtimeHookSuspense =
@@ -205,9 +207,6 @@ plainHooks currentOperators =
         \_ _ currentAction ->
           currentAction
     , runtimeHookCallback =
-        \_ _ currentAction ->
-          currentAction
-    , runtimeHookContext =
         \_ _ currentAction ->
           currentAction
     , runtimeHookLoop =
@@ -242,18 +241,9 @@ runObservationSuccess = do
             , commandObservation = DiscardObservation
             , commandInput = Just (SomeHandleRef sourceHandle)
             }
-      incrementRef =
-        OperatorRef "increment"
       currentImplementation =
         eraseImplementation
-          ( implU
-              targetHandle
-              ( applyOperator
-                  incrementRef
-                  integerSchema
-                  [SomeRExpr (rRef readHandle)]
-              )
-          )
+          (implU targetHandle (rRef readHandle))
       currentSystem =
         systemWith
           currentName
@@ -268,23 +258,7 @@ runObservationSuccess = do
               SeedLeaf (ImplementationTarget currentImplementation)
           , astBlueprintSeedHanging = []
           }
-      currentOperators =
-        pureOperatorRegistry
-          [ ( incrementRef
-            , PureOperator
-                { pureOperatorInputSchemas =
-                    [schemaRefIdentityOf integerSchema]
-                , pureOperatorOutputSchema =
-                    schemaRefIdentityOf integerSchema
-                , runPureOperator =
-                    \case
-                      [RuntimeInteger currentValue] ->
-                        Right (RuntimeInteger (currentValue + 1))
-                      currentValues ->
-                        Left ("unexpected operator input " ++ show currentValues)
-                }
-            )
-          ]
+
       currentRegistry = do
         withSource <-
           registerC
@@ -294,7 +268,7 @@ runObservationSuccess = do
                 integerCodec
                 ( \_ () -> do
                     modifyIORef' sourceCount (+ 1)
-                    pure (Right 41)
+                    pure (Right 42)
                 )
             )
             emptyHandlerRegistry
@@ -325,22 +299,76 @@ runObservationSuccess = do
               )
           )
           withRead
-  case (prepareProgram [currentSystem] currentBlueprint, currentOperators, currentRegistry) of
-    (Right currentProgram, Right operators, Right handlers) -> do
+  case (prepareProgram [currentSystem] currentBlueprint, currentRegistry) of
+    (Right currentProgram, Right handlers) -> do
       currentRun <-
         runRuntimeProgram
           currentProgram
           handlers
-          (plainHooks operators)
+          plainHooks
       currentCount <- readIORef sourceCount
       currentArguments <- readIORef targetArguments
       let currentSnapshot =
             runtimeRunSnapshot currentRun
+          currentInvocations =
+            [ (currentProvenance, currentNode, currentHandle)
+            | HandlerInvocationAuthorized
+                currentProvenance
+                currentNode
+                currentHandle <-
+                runtimeSnapshotEvents currentSnapshot
+            ]
+          currentBootRuns =
+            [ executionProvenanceBootRunId currentProvenance
+            | (currentProvenance, _, _) <- currentInvocations
+            ]
+          expectedRoot =
+            ImplementationNode
+              (implementationIdFor currentImplementation)
+          provenanceMatches =
+            all
+              ( \(currentProvenance, currentNode, currentHandle) ->
+                  executionProvenanceAstPath currentProvenance
+                    == AstPath ["blueprint", "boot"]
+                    && executionProvenanceDemandNodeId currentProvenance
+                      == expectedRoot
+                    && currentNode == HandleNode currentHandle
+              )
+              currentInvocations
+          oneBootRun =
+            case currentBootRuns of
+              [] ->
+                False
+              currentBoot : remainingBoots ->
+                all (== currentBoot) remainingBoots
       pure
         [ boolCheck
             "observation.good-control-succeeded"
             True
             (controlResultSucceeded (runtimeRunControlResult currentRun))
+        , boolCheck
+            "ast-boot-starts-effect-chain"
+            True
+            ( controlResultSucceeded (runtimeRunControlResult currentRun)
+                && currentCount == 1
+                && currentArguments == [42]
+            )
+        , boolCheck
+            "boot-demand-closes-exact-input-chain"
+            True
+            ( runtimeSnapshotExecutionStatus
+                (handleId sourceHandle)
+                currentSnapshot
+                == ExecutionSucceeded
+                && runtimeSnapshotReadStatus
+                  (handleId readHandle)
+                  currentSnapshot
+                  == ReadAvailable
+                && runtimeSnapshotExecutionStatus
+                  (handleId targetHandle)
+                  currentSnapshot
+                  == ExecutionSucceeded
+            )
         , eqCheck
             "observation.good-source-count-one"
             (1 :: Int)
@@ -354,8 +382,8 @@ runObservationSuccess = do
             ReadAvailable
             (runtimeSnapshotReadStatus (handleId readHandle) currentSnapshot)
         , eqCheck
-            "observation.good-read-value-41"
-            (Just (RuntimeInteger 41))
+            "observation.good-read-value-42"
+            (Just (RuntimeInteger 42))
             (runtimeSnapshotReadValue (handleId readHandle) currentSnapshot)
         , eqCheck
             "observation.good-implementation-arg-42"
@@ -372,10 +400,39 @@ runObservationSuccess = do
                 (implementationIdFor currentImplementation)
                 currentSnapshot
             )
+        , eqCheck
+            "handler-invocation-authorized-count"
+            (2 :: Int)
+            (length currentInvocations)
+        , eqCheck
+            "handler-invocation-authorized-handles"
+            [handleId sourceHandle, handleId targetHandle]
+            (sortOn id [currentHandle | (_, _, currentHandle) <- currentInvocations])
+        , boolCheck
+            "handler-invocation-has-ast-provenance"
+            True
+            provenanceMatches
+        , boolCheck
+            "handler-invocations-share-one-boot-run"
+            True
+            oneBootRun
+        , boolCheck
+            "implementation-is-reached-only-from-ast"
+            True
+            ( provenanceMatches
+                && runtimeSnapshotImplementationStatus
+                  (implementationIdFor currentImplementation)
+                  currentSnapshot
+                  == ImplementationSucceeded
+            )
+        , boolCheck
+            "registered-and-reachable-handler-runs"
+            True
+            (currentCount == 1 && currentArguments == [42])
         ]
     currentFailure ->
       pure
-        [failedCheck "observation.good-prepare" "prepared runtime, operator registry, and handler registry" (showPreparation currentFailure)]
+        [failedCheck "observation.good-prepare" "prepared runtime and handler registry" (showPreparedRegistry currentFailure)]
 
 runObservationFailure :: IO [Check]
 runObservationFailure = do
@@ -427,7 +484,7 @@ runObservationFailure = do
                 failingObservationCodec
                 ( \_ () -> do
                     modifyIORef' sourceCount (+ 1)
-                    pure (Right 41)
+                    pure (Right 42)
                 )
             )
             emptyHandlerRegistry
@@ -452,7 +509,7 @@ runObservationFailure = do
         runRuntimeProgram
           currentProgram
           handlers
-          (plainHooks emptyPureOperatorRegistry)
+          plainHooks
       currentSourceCount <- readIORef sourceCount
       currentTargetCount <- readIORef targetCount
       let currentSnapshot =
@@ -605,7 +662,7 @@ runParallelSingleFlight = do
         runRuntimeProgram
           currentProgram
           handlers
-          (plainHooks emptyPureOperatorRegistry)
+          plainHooks
       currentSourceCount <- readIORef sourceCount
       currentUseCount <- readIORef consumerUseCount
       let currentSnapshot =
@@ -829,7 +886,7 @@ runFallbackScenario
           runRuntimeProgram
             currentProgram
             handlers
-            (plainHooks emptyPureOperatorRegistry)
+            plainHooks
         currentPrimaryCount <- readIORef primaryCount
         currentFallbackCount <- readIORef fallbackCount
         pure
@@ -850,59 +907,74 @@ runFallbackScenario
         pure
           [failedCheck (currentPrefix ++ ".prepare") "prepared runtime and handler registry" (showPreparedRegistry currentFailure)]
 
-runControlAndHanging :: IO [Check]
-runControlAndHanging = do
+runControlAndUnfrozenRejection :: IO [Check]
+runControlAndUnfrozenRejection = do
   workCount <- newIORef 0
-  hangingCount <- newIORef 0
+  unreachableCount <- newIORef 0
   waitCount <- newIORef 0
   suspenseCount <- newIORef 0
   middlewareBeforeCount <- newIORef 0
   middlewareAfterCount <- newIORef 0
   callbackCount <- newIORef 0
-  contextCount <- newIORef 0
-  loopPolicyCount <- newIORef 0
   let currentName =
         EffectSystemName "runtime-control"
       workHandle =
         e @"controlWork" currentName (unitCommandSpec Nothing)
-      hangingHandle =
-        e @"hangingWork" currentName (unitCommandSpec Nothing)
+      unreachableHandle =
+        e @"registeredButUnreachable" currentName (unitCommandSpec Nothing)
       selectedKey =
         ChoiceKey "selected"
       currentSystem =
         systemWith
           currentName
-          [SomeHandleRef workHandle, SomeHandleRef hangingHandle]
+          [SomeHandleRef workHandle, SomeHandleRef unreachableHandle]
           [SomeHandleRef workHandle]
       currentBlueprint =
         AstBlueprintSeed
           { astBlueprintSeedBoot =
-              SeedContext
-                (ContextRef "runtime-context")
-                ( SeedMiddleware
-                    (MiddlewareRef "runtime-middleware")
-                    ( SeedCallback
-                        (handleRefFor workHandle)
-                        ( SeedWait
-                            (StatusOf (handleRefFor workHandle))
-                            ( SeedChain
-                                [ SeedLoop
-                                    ( SeedLeaf
-                                        (HandleTarget (handleRefFor workHandle))
-                                    )
-                                , SeedChoice
-                                    selectedKey
-                                    [ ( selectedKey
-                                      , SeedSuspense (handleRefFor workHandle)
-                                      )
-                                    ]
+              SeedMiddleware
+                (MiddlewareRef "runtime-middleware")
+                ( SeedCallback
+                    (handleRefFor workHandle)
+                    ( SeedWait
+                        (StatusOf (handleRefFor workHandle))
+                        ( SeedChain
+                            [ SeedLoop
+                                ( SeedLeaf
+                                    (HandleTarget (handleRefFor workHandle))
+                                )
+                            , SeedChoice
+                                selectedKey
+                                [ ( selectedKey
+                                  , SeedSuspense (handleRefFor workHandle)
+                                  )
                                 ]
-                            )
+                            ]
                         )
                     )
                 )
+          , astBlueprintSeedHanging = []
+          }
+      contextBlueprint =
+        AstBlueprintSeed
+          { astBlueprintSeedBoot =
+              SeedContext
+                (ContextRef "unfrozen-context")
+                (SeedLeaf (HandleTarget (handleRefFor workHandle)))
+          , astBlueprintSeedHanging = []
+          }
+      hangingBlueprint =
+        AstBlueprintSeed
+          { astBlueprintSeedBoot =
+              SeedLeaf (HandleTarget (handleRefFor workHandle))
           , astBlueprintSeedHanging =
-              [SeedLeaf (HandleTarget (handleRefFor hangingHandle))]
+              [SeedLeaf (HandleTarget (handleRefFor unreachableHandle))]
+          }
+      unknownBlueprint =
+        AstBlueprintSeed
+          { astBlueprintSeedBoot =
+              SeedLeaf (HandleTarget (HandleRef "missing-handle"))
+          , astBlueprintSeedHanging = []
           }
       currentRegistry = do
         withWork <-
@@ -917,19 +989,18 @@ runControlAndHanging = do
             )
             emptyHandlerRegistry
         registerE
-          hangingHandle
+          unreachableHandle
           ( discardingCommandHandler
               unitValueCodec
               ( \_ () -> do
-                  modifyIORef' hangingCount (+ 1)
+                  modifyIORef' unreachableCount (+ 1)
                   pure (Right ())
               )
           )
           withWork
       currentHooks =
         RuntimeHooks
-          { runtimeHookOperators = emptyPureOperatorRegistry
-          , runtimeHookWait =
+          { runtimeHookWait =
               \_ _ currentSnapshot -> do
                 modifyIORef' waitCount (+ 1)
                 pure (RuntimeGateReady currentSnapshot)
@@ -945,9 +1016,6 @@ runControlAndHanging = do
           , runtimeHookCallback =
               \_ _ ->
                 beforeWrapper callbackCount
-          , runtimeHookContext =
-              \_ _ ->
-                beforeWrapper contextCount
           , runtimeHookLoop =
               \_ ->
                 RuntimeLoopPolicy
@@ -957,27 +1025,48 @@ runControlAndHanging = do
                         True
                   }
           }
+      contextRejected =
+        case prepareProgram [currentSystem] contextBlueprint of
+          Left (RuntimeLoweringRejected currentErrors) ->
+            UnsupportedContextNode (AstPath ["blueprint", "boot"])
+              `elem` currentErrors
+          _ ->
+            False
+      hangingRejected =
+        case prepareProgram [currentSystem] hangingBlueprint of
+          Left (RuntimeLoweringRejected currentErrors) ->
+            UnsupportedHangingRoot
+              (AstPath ["blueprint", "hanging", "item:0"])
+              `elem` currentErrors
+          _ ->
+            False
+      unknownTargetRejected =
+        case prepareProgram [currentSystem] unknownBlueprint of
+          Left (RuntimeLoweringRejected currentErrors) ->
+            UnknownAstHandleReference
+              (AstPath ["blueprint", "boot"])
+              "missing-handle"
+              `elem` currentErrors
+          _ ->
+            False
   case (prepareProgram [currentSystem] currentBlueprint, currentRegistry) of
     (Right currentProgram, Right handlers) -> do
-      modifyIORef' loopPolicyCount (+ 1)
       currentRun <-
         runRuntimeProgram
           currentProgram
           handlers
           currentHooks
       currentWorkCount <- readIORef workCount
-      currentHangingCount <- readIORef hangingCount
+      currentUnreachableCount <- readIORef unreachableCount
       currentWaitCount <- readIORef waitCount
       currentSuspenseCount <- readIORef suspenseCount
       currentMiddlewareBefore <- readIORef middlewareBeforeCount
       currentMiddlewareAfter <- readIORef middlewareAfterCount
       currentCallbackCount <- readIORef callbackCount
-      currentContextCount <- readIORef contextCount
-      currentLoopCount <- readIORef loopPolicyCount
       let currentSnapshot =
             runtimeRunSnapshot currentRun
-          hangingEvents =
-            filter (eventNamesHandle (handleId hangingHandle))
+          unreachableEvents =
+            filter (eventNamesHandle (handleId unreachableHandle))
               (runtimeSnapshotEvents currentSnapshot)
       pure
         [ boolCheck
@@ -990,23 +1079,41 @@ runControlAndHanging = do
         , eqCheck "control.middleware-before-hook" (1 :: Int) currentMiddlewareBefore
         , eqCheck "control.middleware-after-hook" (1 :: Int) currentMiddlewareAfter
         , eqCheck "control.callback-hook" (1 :: Int) currentCallbackCount
-        , eqCheck "control.context-hook" (1 :: Int) currentContextCount
-        , eqCheck "control.loop-policy" (1 :: Int) currentLoopCount
         , eqCheck
-            "hanging.declared-count"
-            (1 :: Int)
-            (runtimeProgramHangingCount currentProgram)
-        , eqCheck "hanging.handler-not-called" (0 :: Int) currentHangingCount
+            "registered-but-unreachable-handler-never-runs"
+            (0 :: Int)
+            currentUnreachableCount
         , eqCheck
-            "hanging.status-unused"
+            "effect-outside-boot-closure-remains-unused"
             ExecutionUnused
-            (runtimeSnapshotExecutionStatus (handleId hangingHandle) currentSnapshot)
-        , eqCheck "hanging.no-runtime-event" (0 :: Int) (length hangingEvents)
+            ( runtimeSnapshotExecutionStatus
+                (handleId unreachableHandle)
+                currentSnapshot
+            )
+        , eqCheck
+            "unreachable-handler-has-no-runtime-event"
+            (0 :: Int)
+            (length unreachableEvents)
+        , boolCheck
+            "unfrozen-context-is-rejected"
+            True
+            contextRejected
+        , boolCheck
+            "non-empty-hanging-is-rejected"
+            True
+            hangingRejected
+        , boolCheck
+            "unknown-ast-target-is-rejected"
+            True
+            unknownTargetRejected
         ]
     currentFailure ->
       pure
-        [failedCheck "control.prepare" "prepared runtime and handler registry" (showPreparedRegistry currentFailure)]
-
+        [ failedCheck
+            "control.prepare"
+            "prepared runtime and handler registry"
+            (showPreparedRegistry currentFailure)
+        ]
 runRaceSettlement :: IO [Check]
 runRaceSettlement = do
   slowStarted <- newEmptyMVar
@@ -1034,7 +1141,7 @@ runRaceSettlement = do
           , astBlueprintSeedHanging = []
           }
       currentHooks =
-        (plainHooks emptyPureOperatorRegistry)
+        plainHooks
           { runtimeHookSuspense =
               \_ currentId currentSnapshot ->
                 if currentId == handleId slowHandle
@@ -1129,6 +1236,8 @@ eventNamesHandle expectedId currentEvent =
       currentId == expectedId
     RuntimeObservationUnavailable currentId _ ->
       currentId == expectedId
+    HandlerInvocationAuthorized _ _ currentId ->
+      currentId == expectedId
 
 boolCheck :: String -> Bool -> Bool -> Check
 boolCheck currentName expectedValue actualValue =
@@ -1152,19 +1261,6 @@ failedCheck currentName expectedValue actualValue =
     , checkActual = actualValue
     }
 
-showPreparation ::
-  ( Either RuntimePreparationError RuntimeProgram
-  , Either RExprEvaluationError PureOperatorRegistry
-  , Either RegistryError HandlerRegistry
-  ) ->
-  String
-showPreparation (currentProgram, currentOperators, currentHandlers) =
-  intercalate
-    ";"
-    [ either show (const "prepared") currentProgram
-    , either show (const "operators-ready") currentOperators
-    , either show (const "handlers-ready") currentHandlers
-    ]
 
 showPreparedRegistry ::
   ( Either RuntimePreparationError RuntimeProgram

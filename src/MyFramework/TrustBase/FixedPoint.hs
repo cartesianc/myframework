@@ -300,7 +300,7 @@ semanticWitnessValid currentText =
     [ "\"schema\":\"curde-semantics-evidence.v1\""
     , "\"artifact\":\"curde-semantics-witness\""
     , "\"result\":\"passed\""
-    , "\"exact20Plus1\":true"
+    , "\"exact21Plus1\":true"
     ]
     && countSubstring "\"status\":\"established\"" currentText >= 19
 

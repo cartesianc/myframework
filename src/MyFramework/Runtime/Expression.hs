@@ -1,22 +1,13 @@
 module MyFramework.Runtime.Expression
-  ( PureOperator (..)
-  , PureOperatorRegistry
-  , RExprEvaluationError (..)
-  , emptyPureOperatorRegistry
+  ( RExprEvaluationError (..)
   , interpretRExprDecl
-  , pureOperatorRegistry
-  , registerPureOperator
   ) where
 
-import Control.Monad
-  ( foldM )
 import Data.List
   ( sort )
-import qualified Data.Map.Strict as Map
 
 import MyFramework.CURDE.Expression
   ( LiteralValue (..)
-  , OperatorRef
   , RExprDecl (..)
   , rExprDeclSchemaIdentity
   )
@@ -33,78 +24,19 @@ import MyFramework.Runtime.Value
   , validateRuntimeData
   )
 
--- | A runtime-only implementation of one serializable 'OperatorRef'.
--- Functions live in the Handler/runtime face and never cross the facade.
-data PureOperator = PureOperator
-  { pureOperatorInputSchemas :: [SchemaIdentity]
-  , pureOperatorOutputSchema :: SchemaIdentity
-  , runPureOperator ::
-      [RuntimeData] ->
-      Either String RuntimeData
-  }
-
-newtype PureOperatorRegistry = PureOperatorRegistry
-  { pureOperatorBindings :: Map.Map OperatorRef PureOperator
-  }
-
+-- | Evaluation is deliberately structural. Business transformations are R
+-- Facts in the EffectSystem and therefore enter through registered R handlers.
 data RExprEvaluationError
-  = DuplicatePureOperator OperatorRef
-  | MissingPureOperator OperatorRef
-  | OperatorInputSchemasMismatch
-      OperatorRef
-      [SchemaIdentity]
-      [SchemaIdentity]
-  | OperatorOutputSchemaMismatch
-      OperatorRef
-      SchemaIdentity
-      SchemaIdentity
-  | PureOperatorFailed OperatorRef String
-  | LiteralSchemaMismatch SchemaIdentity LiteralValue
+  = LiteralSchemaMismatch SchemaIdentity LiteralValue
   | ProductSchemaMismatch SchemaIdentity
   | RuntimeValueRejected RuntimeValueError
   deriving (Eq, Show)
 
-emptyPureOperatorRegistry :: PureOperatorRegistry
-emptyPureOperatorRegistry =
-  PureOperatorRegistry Map.empty
-
-pureOperatorRegistry ::
-  [(OperatorRef, PureOperator)] ->
-  Either RExprEvaluationError PureOperatorRegistry
-pureOperatorRegistry =
-  foldM
-    (\currentRegistry (currentRef, currentOperator) ->
-        registerPureOperator
-          currentRef
-          currentOperator
-          currentRegistry
-    )
-    emptyPureOperatorRegistry
-
-registerPureOperator ::
-  OperatorRef ->
-  PureOperator ->
-  PureOperatorRegistry ->
-  Either RExprEvaluationError PureOperatorRegistry
-registerPureOperator currentRef currentOperator currentRegistry
-  | Map.member currentRef (pureOperatorBindings currentRegistry) =
-      Left (DuplicatePureOperator currentRef)
-  | otherwise =
-      Right
-        ( PureOperatorRegistry
-            ( Map.insert
-                currentRef
-                currentOperator
-                (pureOperatorBindings currentRegistry)
-            )
-        )
-
 interpretRExprDecl ::
-  PureOperatorRegistry ->
   [RuntimeDataBinding] ->
   RExprDecl ->
   Either RExprEvaluationError RuntimeData
-interpretRExprDecl currentRegistry currentBindings currentExpression =
+interpretRExprDecl currentBindings currentExpression =
   case currentExpression of
     RReferenceDecl currentHandle currentSchema ->
       mapRuntimeValueError
@@ -139,7 +71,6 @@ interpretRExprDecl currentRegistry currentBindings currentExpression =
         traverse
           ( \(_, currentField) ->
               interpretRExprDecl
-                currentRegistry
                 currentBindings
                 currentField
           )
@@ -155,64 +86,6 @@ interpretRExprDecl currentRegistry currentBindings currentExpression =
                 RuntimeRecord
                   (zip (map fst currentFields) currentValues)
       validateEvaluated currentSchema currentData
-    RProjectionDecl currentRef currentSchema currentSource ->
-      interpretOperator
-        currentRef
-        currentSchema
-        [currentSource]
-    ROperatorDecl currentRef currentSchema currentArguments ->
-      interpretOperator
-        currentRef
-        currentSchema
-        currentArguments
-  where
-    interpretOperator currentRef currentSchema currentArguments = do
-      currentOperator <-
-        case
-            Map.lookup
-              currentRef
-              (pureOperatorBindings currentRegistry) of
-          Nothing ->
-            Left (MissingPureOperator currentRef)
-          Just currentBinding ->
-            Right currentBinding
-      let currentInputSchemas =
-            map rExprDeclSchemaIdentity currentArguments
-      if pureOperatorInputSchemas currentOperator
-          == currentInputSchemas
-        then Right ()
-        else
-          Left
-            ( OperatorInputSchemasMismatch
-                currentRef
-                (pureOperatorInputSchemas currentOperator)
-                currentInputSchemas
-            )
-      if pureOperatorOutputSchema currentOperator
-          == currentSchema
-        then Right ()
-        else
-          Left
-            ( OperatorOutputSchemaMismatch
-                currentRef
-                (pureOperatorOutputSchema currentOperator)
-                currentSchema
-            )
-      currentValues <-
-        traverse
-          ( interpretRExprDecl
-              currentRegistry
-              currentBindings
-          )
-          currentArguments
-      currentValue <-
-        case runPureOperator currentOperator currentValues of
-          Left currentMessage ->
-            Left
-              (PureOperatorFailed currentRef currentMessage)
-          Right nextValue ->
-            Right nextValue
-      validateEvaluated currentSchema currentValue
 
 literalRuntimeData ::
   SchemaIdentity ->

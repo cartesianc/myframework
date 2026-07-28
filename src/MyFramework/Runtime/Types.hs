@@ -1,5 +1,8 @@
 module MyFramework.Runtime.Types
-  ( CommitState (..)
+  ( BootRunId (..)
+  , ExecutionPermit
+  , ExecutionProvenance (..)
+  , CommitState (..)
   , ExecutionStatus (..)
   , FailurePhase (..)
   , HandlerInput
@@ -8,6 +11,9 @@ module MyFramework.Runtime.Types
   , ReadStatus (..)
   , RuntimeFailure (..)
   , Validity (..)
+  , executionPermitProvenance
+  , mintExecutionPermit
+  , newBootRunId
   , executionSucceeded
   , handlerInput
   , handlerInputExecutionStatus
@@ -23,8 +29,55 @@ module MyFramework.Runtime.Types
   , readAvailable
   ) where
 
+import Data.Unique
+  ( hashUnique
+  , newUnique
+  )
+
+import MyFramework.Ast
+  ( AstPath )
+import MyFramework.CURDE.Core
+  ( DemandNodeId )
 import MyFramework.CURDE.Types
   ( HandleId )
+
+-- | Runtime identity for one interpretation of a validated AST boot root.
+newtype BootRunId = BootRunId
+  { bootRunIdValue :: Int
+  }
+  deriving (Eq, Ord, Show)
+
+-- | Publicly inspectable evidence describing the AST demand that authorized
+-- one demand closure. It contains no authority by itself.
+data ExecutionProvenance = ExecutionProvenance
+  { executionProvenanceBootRunId :: BootRunId
+  , executionProvenanceAstPath :: AstPath
+  , executionProvenanceDemandNodeId :: DemandNodeId
+  }
+  deriving (Eq, Ord, Show)
+
+-- | Unforgeable outside the hidden runtime modules. A value is minted only
+-- while interpreting a validated ControlDemand.
+newtype ExecutionPermit = ExecutionPermit
+  { executionPermitProvenance :: ExecutionProvenance
+  }
+
+mintExecutionPermit ::
+  BootRunId ->
+  AstPath ->
+  DemandNodeId ->
+  ExecutionPermit
+mintExecutionPermit currentBootRun currentPath currentNode =
+  ExecutionPermit
+    ExecutionProvenance
+      { executionProvenanceBootRunId = currentBootRun
+      , executionProvenanceAstPath = currentPath
+      , executionProvenanceDemandNodeId = currentNode
+      }
+
+newBootRunId :: IO BootRunId
+newBootRunId =
+  BootRunId . hashUnique <$> newUnique
 
 data CommitState
   = NoExternalCommit

@@ -677,12 +677,7 @@ controlLocations currentPlan =
   fmap uniqueSorted
     ( Map.fromListWith
         (++)
-        ( concatMap
-            controlLocationsFromTree
-            ( controlPlanBoot currentPlan
-                : controlPlanHanging currentPlan
-            )
-        )
+        (controlLocationsFromTree (controlPlanBoot currentPlan))
     )
 
 controlLocationsFromTree ::
@@ -721,7 +716,6 @@ controlChildren currentNode =
     ControlMiddleware _ currentChild -> [currentChild]
     ControlCallback _ currentChild -> [currentChild]
     ControlSuspense _ -> []
-    ControlContext _ currentChild -> [currentChild]
 
 renderDiagnosisResultJson :: DiagnosisResult -> String
 renderDiagnosisResultJson currentResult =
