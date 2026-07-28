@@ -4,6 +4,7 @@ module MyFramework.SDK.SourceArtifact
   , SdkSourceArtifact
   , sdkSourceArtifactSchema
   , sdkSourceArtifactSdkVersion
+  , sdkSourceArtifactCoreLock
   , sdkSourceArtifactEffectSystems
   , sdkSourceArtifactAstSeed
   , sdkSourceArtifactHandlerCoverage
@@ -20,6 +21,8 @@ module MyFramework.SDK.SourceArtifact
   , sdkSourceReportSchemaV1
   , handlerCoverageFromIds
   , handlerCoverageIds
+  , mkSdkSourceInput
+  , sdkLoweringSemanticsDigest
   , canonicalizeSdkSourceInput
   , buildSdkSourceReport
   , sdkSourceReportReady
@@ -34,6 +37,7 @@ import Data.Char
   ( ord )
 import Data.List
   ( group
+  , intercalate
   , sort
   , sortOn
   )
@@ -52,6 +56,16 @@ import MyFramework.CURDE
   , effectSystemDeclHandleIds
   , renderHandleId
   )
+import MyFramework.TrustBase.Core
+  ( Digest (..)
+  , SdkCoreLock (..)
+  , TrustBaseRef
+  , encodeSdkCoreLock
+  , validateSdkCoreLock
+  )
+import MyFramework.TrustBase.Digest
+  ( sha256 )
+
 
 -- | Handler code and existential registry entries remain runtime-only.
 -- Coverage is an optional set of erased identities and is not an authoring
@@ -65,6 +79,7 @@ newtype SdkHandlerCoverage = SdkHandlerCoverage
 -- their existing public erased/configuration types; no parallel syntax exists.
 data SdkSourceInput = SdkSourceInput
   { sdkSourceSdkVersion :: String
+  , sdkSourceCoreLock :: SdkCoreLock
   , sdkSourceEffectSystems :: [EffectSystemDecl]
   , sdkSourceAstSeed :: AstBlueprintSeed
   , sdkSourceHandlerCoverage :: Maybe SdkHandlerCoverage
@@ -76,6 +91,7 @@ data SdkSourceInput = SdkSourceInput
 data SdkSourceArtifact = SdkSourceArtifact
   { sdkSourceArtifactSchema :: String
   , sdkSourceArtifactSdkVersion :: String
+  , sdkSourceArtifactCoreLock :: SdkCoreLock
   , sdkSourceArtifactEffectSystems :: [EffectSystemDecl]
   , sdkSourceArtifactAstSeed :: AstBlueprintSeed
   , sdkSourceArtifactHandlerCoverage :: Maybe SdkHandlerCoverage
@@ -92,6 +108,9 @@ data SdkSourceIssueCode
   | EmptyEffectSystemIdentity
   | DuplicateEffectSystemIdentity
   | EmptyHandlerCoverageIdentity
+  | InvalidSdkCoreLock
+  | SdkSurfaceDigestMismatch
+  | SdkLoweringDigestMismatch
   | UnknownHandlerCoverageIdentity
   deriving (Eq, Ord, Show)
 
@@ -126,6 +145,42 @@ sdkSourceArtifactSchemaV1 =
 sdkSourceReportSchemaV1 :: String
 sdkSourceReportSchemaV1 =
   "myframework-sdk-source-report.v1"
+
+sdkLoweringSemanticsDigest :: Digest
+sdkLoweringSemanticsDigest =
+  Digest (sha256 "myframework-sdk-lowering-semantics.v1")
+
+mkSdkSourceInput ::
+  TrustBaseRef ->
+  String ->
+  [EffectSystemDecl] ->
+  AstBlueprintSeed ->
+  Maybe SdkHandlerCoverage ->
+  SdkSourceInput
+mkSdkSourceInput currentCore currentVersion currentSystems currentAst currentCoverage =
+  provisionalInput
+    { sdkSourceCoreLock =
+        SdkCoreLock
+          { sdkCoreRef = currentCore
+          , sdkSurfaceDigest =
+              Digest
+                (sha256 (renderSdkSurfaceCommitment provisionalInput))
+          , sdkLoweringDigest = sdkLoweringSemanticsDigest
+          }
+    }
+  where
+    provisionalInput =
+      SdkSourceInput
+        { sdkSourceSdkVersion = currentVersion
+        , sdkSourceCoreLock =
+            SdkCoreLock
+              currentCore
+              (Digest (replicate 64 '0'))
+              sdkLoweringSemanticsDigest
+        , sdkSourceEffectSystems = currentSystems
+        , sdkSourceAstSeed = currentAst
+        , sdkSourceHandlerCoverage = currentCoverage
+        }
 
 handlerCoverageFromIds :: [HandleId] -> SdkHandlerCoverage
 handlerCoverageFromIds =
@@ -208,6 +263,9 @@ renderSdkSourceArtifactJson currentArtifact =
         "sdkVersion"
         (jsonString (sdkSourceArtifactSdkVersion currentArtifact))
     , jsonField
+        "coreLock"
+        (renderSdkCoreLockJson (sdkSourceArtifactCoreLock currentArtifact))
+    , jsonField
         "curde"
         ( jsonArray
             ( map
@@ -279,6 +337,8 @@ sourceArtifactFrom currentInput =
   SdkSourceArtifact
     { sdkSourceArtifactSchema = sdkSourceArtifactSchemaV1
     , sdkSourceArtifactSdkVersion = sdkSourceSdkVersion currentInput
+    , sdkSourceArtifactCoreLock =
+        sdkSourceCoreLock currentInput
     , sdkSourceArtifactEffectSystems =
         sdkSourceEffectSystems currentInput
     , sdkSourceArtifactAstSeed =
@@ -292,6 +352,7 @@ sourceIssues currentInput =
   uniqueSorted
     ( versionIssues
         ++ effectSystemIssues
+        ++ coreLockIssues
         ++ handlerCoverageIssues
     )
   where
@@ -303,6 +364,44 @@ sourceIssues currentInput =
           "the generated artifact must identify its SDK semantic version"
       | null (sdkSourceSdkVersion currentInput)
       ]
+    currentCoreLock =
+      sdkSourceCoreLock currentInput
+    expectedSurfaceDigest =
+      Digest (sha256 (renderSdkSurfaceCommitment currentInput))
+    coreLockIssues =
+      [ sourceIssue
+          SdkSourceBlocker
+          InvalidSdkCoreLock
+          "coreLock"
+          (show currentViolations)
+      | let currentViolations =
+              validateSdkCoreLock currentCoreLock
+      , not (null currentViolations)
+      ]
+        ++ [ sourceIssue
+               SdkSourceBlocker
+               SdkSurfaceDigestMismatch
+               "coreLock.surfaceDigest"
+               ( "expected "
+                   ++ show expectedSurfaceDigest
+                   ++ "; observed "
+                   ++ show (sdkSurfaceDigest currentCoreLock)
+               )
+           | sdkSurfaceDigest currentCoreLock
+               /= expectedSurfaceDigest
+           ]
+        ++ [ sourceIssue
+               SdkSourceBlocker
+               SdkLoweringDigestMismatch
+               "coreLock.loweringDigest"
+               ( "expected "
+                   ++ show sdkLoweringSemanticsDigest
+                   ++ "; observed "
+                   ++ show (sdkLoweringDigest currentCoreLock)
+               )
+           | sdkLoweringDigest currentCoreLock
+               /= sdkLoweringSemanticsDigest
+           ]
     currentSystems =
       sdkSourceEffectSystems currentInput
     effectSystemIssues =
@@ -384,6 +483,32 @@ effectSystemCanonicalKey ::
 effectSystemCanonicalKey currentSystem =
   (effectSystemDeclName currentSystem, currentSystem)
 
+renderSdkSurfaceCommitment :: SdkSourceInput -> String
+renderSdkSurfaceCommitment currentInput =
+  intercalate
+    "\n"
+    [ sdkSourceSdkVersion canonicalInput
+    , show (sdkSourceEffectSystems canonicalInput)
+    , encodeAstBlueprintSeed (sdkSourceAstSeed canonicalInput)
+    , show
+        ( fmap
+            handlerCoverageIds
+            (sdkSourceHandlerCoverage canonicalInput)
+        )
+    ]
+  where
+    canonicalInput =
+      canonicalizeSdkSourceInput currentInput
+
+renderSdkCoreLockJson :: SdkCoreLock -> String
+renderSdkCoreLockJson currentLock =
+  jsonObject
+    [ jsonField "encoding" (jsonString "SdkCoreLock.v1")
+    , jsonField
+        "value"
+        (jsonString (encodeSdkCoreLock currentLock))
+    ]
+
 renderEffectSystemDeclJson :: EffectSystemDecl -> String
 renderEffectSystemDeclJson currentSystem =
   jsonObject
@@ -449,6 +574,12 @@ renderSourceIssueJson currentIssue =
 renderSourceIssueCode :: SdkSourceIssueCode -> String
 renderSourceIssueCode currentCode =
   case currentCode of
+    InvalidSdkCoreLock ->
+      "invalid-sdk-core-lock"
+    SdkSurfaceDigestMismatch ->
+      "sdk-surface-digest-mismatch"
+    SdkLoweringDigestMismatch ->
+      "sdk-lowering-digest-mismatch"
     EmptySdkSourceVersion ->
       "empty-sdk-source-version"
     EmptyEffectSystemIdentity ->

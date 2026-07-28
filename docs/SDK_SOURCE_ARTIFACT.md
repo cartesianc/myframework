@@ -1,80 +1,100 @@
-# SDK source artifact boundary
+# Approved-core SDK source boundary
 
-`MyFramework.SDK.SourceArtifact` is an opt-in provenance renderer for generated
-SDK trees. It is not a fourth authoring surface and it does not execute or
-lower an application.
+The SDK generator is a maintenance and release surface, not a fourth business
+authoring surface. Business authors still provide only Effect System/CURDE,
+AST, and Handler declarations.
 
 ## Authoritative input
 
-The boundary accepts the existing public values directly:
+`mkSdkSourceInput` accepts the existing serializable values:
 
 ```text
-[EffectSystemDecl]  from eraseEffectSystem
-AstBlueprintSeed    from the AST configuration surface
-Maybe coverage      erased HandleId metadata only
+approved TrustBaseRef
+SDK version
+[EffectSystemDecl]
+AstBlueprintSeed
+Maybe erased Handler coverage
 ```
 
-A source bundle is assembled from those values without another lowering step:
+It derives an `SdkCoreLock` containing:
 
-```haskell
-sourceInput =
-  SdkSourceInput
-    { sdkSourceSdkVersion = frameworkVersion
-    , sdkSourceEffectSystems = map eraseEffectSystem effectSystems
-    , sdkSourceAstSeed = blueprintSeed
-    , sdkSourceHandlerCoverage =
-        Just (handlerCoverageFromIds (handlerRegistryIds registry))
-    }
+```text
+approved core identity and artifact/manifest digests
+canonical SDK surface digest
+SDK lowering-semantics digest
 ```
 
-No second textual CURDE or AST syntax is parsed. `EffectSystemDecl` and
-`AstBlueprintSeed` remain the authoritative configuration. The textual
-`Read`/`Show` encoding appears only inside the output artifact so generated
-code can retain an exact, zero-dependency provenance payload.
+The surface digest commits the canonical SDK version, erased CURDE systems,
+AST seed, and optional Handler identities. The lock itself is excluded from
+that calculation to avoid a circular digest. `buildSdkSourceReport` blocks an
+invalid core reference, surface mismatch, lowering mismatch, duplicate system,
+or unknown Handler identity before materialization.
 
 Handler implementations, existential registry entries, closures, codecs,
-runtime values, and environment objects never enter the artifact. A caller may
-derive optional coverage with:
+runtime values, and environments never enter this serializable input.
 
-```haskell
-handlerCoverageFromIds (handlerRegistryIds registry)
+## Package materialization
+
+`MyFramework.SDK.Package.materializeApprovedSdkPackage` requires all three
+promotion values:
+
+```text
+CoreManifest
+PromotionRecord(Approved)
+CurrentCorePointer
 ```
 
-Coverage answers only which stable handle identities were present. It does not
-bind handlers and cannot affect execution.
+The pointer must select the record's candidate, the record must be approved,
+and the candidate manifest must match. The approved artifact digest must equal
+the SHA-256 payload digest of the source closure actually materialized in this
+run.
+
+A successful package contains:
+
+- the complete standalone framework source closure;
+- generated `MyFramework.Generated.SourceArtifact` provenance;
+- `sdk-core-lock.read`;
+- canonical SDK source report;
+- embedded current-core pointer, core manifest, and approved promotion record;
+- a package manifest containing every generated file digest.
+
+`verifySdkPackage` independently rechecks the base artifact manifest, payload
+digest, every generated file, the decoded core lock, and the embedded
+promotion/current relationship. A pending record or a lock copied from another
+surface is rejected.
 
 ## Determinism
 
-`canonicalizeSdkSourceInput`:
+Top-level effect systems and Handler coverage are canonicalized as sets. All
+semantically ordered fields inside an `EffectSystemDecl` and the entire AST
+seed preserve authoring order. The lowering digest is versioned explicitly.
 
-- sorts top-level effect systems by stable identity and full erased
-  declaration;
-- preserves every sequence inside each `EffectSystemDecl`;
-- preserves the complete `AstBlueprintSeed` without rewriting it;
-- treats optional handler identities as a sorted set.
+The `sdk-package-witness` proves valid materialization and verification, plus
+negative cases for pending promotion and tampered surface/lowering digests. It
+runs in the ordinary release gate and is reproduced byte-for-byte by Stage1
+and Stage2 in the heavy gate.
 
-`buildSdkSourceReport` rebuilds the artifact and sorted issue list from that
-canonical input. `sdkSourceReportCanonical` is the pure invariant check.
+## CI/CD
 
-`renderGeneratedSdkSource` canonicalizes `SdkSourceInput` and produces a module
-containing only two JSON string constants. Writing that module to disk is the
-responsibility of external SDK generation tooling, which keeps this package and
-its backend immutable.
+`.github/workflows/ci.yml` runs the ordinary release pre-gate on pushes and
+pull requests.
+
+`.github/workflows/beta-sdk.yml` is an explicit maintenance action. It fails
+closed unless these reviewed files exist:
+
+```text
+trustbase/core-manifest.json
+trustbase/promotion.approved.json
+trustbase/current.json
+```
+
+The workflow runs the ordinary and one-shot self-artifact gates, materializes
+the SDK, verifies it, builds it independently, reruns the package witness from
+inside the generated SDK, and uploads a beta archive. Publishing a GitHub
+prerelease is a separate boolean workflow input and never approves a core.
 
 ## Semantic exclusions
 
-This boundary has no pipeline, `needs`, policy, `Boot.targets`,
-`NativeFactRule`, handler execution, retry, scheduling, or runtime adapter
-semantics. It does not import runtime or Handler modules.
-
-The current recursion contract remains `Fix` plus `cata`. The renderer retains
-the serializable AST seed as data and does not add `ana`, `hylo`, `unfold`, or
-any protocol-driven boot behavior. A future JSON-RPC boot framework may define
-that separate protocol boundary.
-
-## TrustBase
-
-The artifact and report carry explicit `.v1` schema identifiers, but this
-opt-in renderer is not automatically promoted into a TrustBase manifest.
-A release process may add those schemas and claims when the generated-source
-artifact becomes a required promotion input.
+The SDK boundary introduces no pipeline, retry policy, transaction semantics,
+Handler execution semantics, `ana`, or `hylo`. It packages the already-frozen
+`Fix + cata` framework semantics and their approved core identity.

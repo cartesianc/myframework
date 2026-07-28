@@ -1,6 +1,3 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE TypeApplications #-}
 
 module Main (main) where
 
@@ -10,8 +7,6 @@ import Data.Char
   ( ord )
 import Data.List
   ( intercalate )
-import GHC.Generics
-  ( Generic )
 import Numeric
   ( showHex )
 import System.Exit
@@ -32,6 +27,21 @@ import MyFramework.CURDE.Evidence
   , CURDESemanticsReport (..)
   , curdeSemanticsReport
   )
+import MyFramework.Self.ControlTrace
+  ( compileControlTrace
+  , controlTraceConstructorWitness
+  )
+import MyFramework.Self.Model
+  ( canonicalSelfModelJson
+  , selfEmitAuditHandle
+  , selfModel
+  , selfModelAstSeed
+  , selfModelEffectSystems
+  , selfModelJsonRoundTrip
+  , selfModelTextRoundTrip
+  , selfReadUserHandle
+  , selfUpdateUserHandle
+  )
 import MyFramework.TrustBase.Evidence
   ( ClaimCatalog (..)
   , claimCatalogClaims
@@ -41,134 +51,9 @@ import MyFramework.TrustBase.Types
   , renderSchemaId
   )
 
-data User
-
-data SourceHandles = SourceHandles
-  { createUser :: Handle "createUser" 'C () User
-  , readUser :: Handle "readUser" 'R () User
-  }
-  deriving (Generic)
-
-data SinkHandles = SinkHandles
-  { updateUser :: Handle "updateUser" 'U User NoObservation
-  , deleteUser :: Handle "deleteUser" 'D () NoObservation
-  , emitAudit :: Handle "emitAudit" 'E () NoObservation
-  }
-  deriving (Generic)
-
-sourceName :: EffectSystemName
-sourceName =
-  EffectSystemName "source"
-
-sinkName :: EffectSystemName
-sinkName =
-  EffectSystemName "sink"
-
-userSchema :: SchemaRef User
-userSchema =
-  scalarSchema "User"
-
-createUserHandle :: Handle "createUser" 'C () User
-createUserHandle =
-  c @"createUser"
-    sourceName
-    CommandSpec
-      { commandArgumentSchema = unitSchema
-      , commandObservation = CaptureObservation userSchema
-      , commandInput = Nothing
-      }
-
-readUserHandle :: Handle "readUser" 'R () User
-readUserHandle =
-  r @"readUser"
-    sourceName
-    ReadSpec
-      { readResultSchema = userSchema
-      , readInput = Just (SomeHandleRef createUserHandle)
-      , readSource = ReadFromInputObservation
-      }
-
-updateUserHandle :: Handle "updateUser" 'U User NoObservation
-updateUserHandle =
-  u @"updateUser"
-    sinkName
-    CommandSpec
-      { commandArgumentSchema = userSchema
-      , commandObservation = DiscardObservation
-      , commandInput = Just (SomeHandleRef createUserHandle)
-      }
-
-deleteUserHandle :: Handle "deleteUser" 'D () NoObservation
-deleteUserHandle =
-  d @"deleteUser"
-    sinkName
-    CommandSpec
-      { commandArgumentSchema = unitSchema
-      , commandObservation = DiscardObservation
-      , commandInput = Just (SomeHandleRef updateUserHandle)
-      }
-
-emitAuditHandle :: Handle "emitAudit" 'E () NoObservation
-emitAuditHandle =
-  e @"emitAudit"
-    sinkName
-    CommandSpec
-      { commandArgumentSchema = unitSchema
-      , commandObservation = DiscardObservation
-      , commandInput = Just (SomeHandleRef deleteUserHandle)
-      }
-
-sourceHandles :: SourceHandles
-sourceHandles =
-  SourceHandles
-    { createUser = createUserHandle
-    , readUser = readUserHandle
-    }
-
-sinkHandles :: SinkHandles
-sinkHandles =
-  SinkHandles
-    { updateUser = updateUserHandle
-    , deleteUser = deleteUserHandle
-    , emitAudit = emitAuditHandle
-    }
-
-updateUserImplementation :: ImplementationDecl
-updateUserImplementation =
-  eraseImplementation
-    (implU updateUserHandle (rRef readUserHandle))
-
-effectSystemDeclarations :: Either [RecordError] [EffectSystemDecl]
-effectSystemDeclarations = do
-  sourceDeclaration <-
-    effectSystemFromRecord
-      sourceName
-      []
-      sourceHandles
-      []
-      [handleId createUserHandle, handleId readUserHandle]
-  sinkDeclaration <-
-    effectSystemFromRecord
-      sinkName
-      [sourceName]
-      sinkHandles
-      []
-      [handleId emitAuditHandle]
-  pure [sourceDeclaration, sinkDeclaration]
-
-astBlueprint :: AstBlueprintSeed
-astBlueprint =
-  AstBlueprintSeed
-    { astBlueprintSeedBoot =
-        SeedWithImplementation
-          updateUserImplementation
-          (SeedLeaf (HandleTarget (handleRefFor emitAuditHandle)))
-    , astBlueprintSeedHanging = []
-    }
-
 main :: IO ()
 main =
-  case effectSystemDeclarations of
+  case selfModel of
     Left currentErrors -> do
       putStrLn
         ( renderFatalJson
@@ -176,9 +61,15 @@ main =
             (show currentErrors)
         )
       exitFailure
-    Right currentSystems -> do
-      let baseReport =
-            curdeSemanticsReport currentSystems astBlueprint
+    Right currentSelfModel -> do
+      let currentSystems =
+            selfModelEffectSystems currentSelfModel
+          currentBlueprint =
+            selfModelAstSeed currentSelfModel
+          baseReport =
+            curdeSemanticsReport currentSystems currentBlueprint
+          currentControlTrace =
+            compileControlTrace currentSelfModel
           dischargedEvidence =
             map dischargeCompileTimeEvidence
               (curdeSemanticsReportEvidence baseReport)
@@ -202,6 +93,17 @@ main =
               (concatMap effectSystemDeclHandles currentSystems)
           allKindsPresent =
             all (`elem` handleKinds) [C, U, R, D, E]
+          selfRoundTrip =
+            selfModelTextRoundTrip currentSelfModel
+              && selfModelJsonRoundTrip currentSelfModel
+          selfJsonPresent =
+            not (null (canonicalSelfModelJson currentSelfModel))
+          controlTraceReady =
+            controlTraceConstructorWitness
+              && either (const False) (const True) currentControlTrace
+          missingImplementationRejected =
+            rejectsMissingImplementation
+              currentSystems
           staticFailures =
             filter isBlockingEvidence dischargedEvidence
           succeeded =
@@ -209,6 +111,10 @@ main =
               && curdeRoundTrip
               && handleRoundTrip
               && allKindsPresent
+              && selfRoundTrip
+              && selfJsonPresent
+              && controlTraceReady
+              && missingImplementationRejected
               && null staticFailures
       putStrLn
         ( renderReportJson
@@ -218,9 +124,32 @@ main =
             curdeRoundTrip
             handleRoundTrip
             allKindsPresent
+            missingImplementationRejected
             succeeded
         )
       unless succeeded exitFailure
+
+rejectsMissingImplementation :: [EffectSystemDecl] -> Bool
+rejectsMissingImplementation currentSystems =
+  any isExpectedFailure
+    ( loweringValidationErrors
+        ( lowerCURDEDecl
+            currentSystems
+            AstBlueprintSeed
+              { astBlueprintSeedBoot =
+                  SeedLeaf
+                    (HandleTarget (handleRefFor selfEmitAuditHandle))
+              , astBlueprintSeedHanging = []
+              }
+        )
+    )
+  where
+    isExpectedFailure currentError =
+      case currentError of
+        MissingImplementation _ currentHandle _ ->
+          currentHandle == handleId selfUpdateUserHandle
+        _ ->
+          False
 
 dischargeCompileTimeEvidence ::
   CURDEClaimEvidence ->
@@ -266,6 +195,7 @@ renderReportJson ::
   Bool ->
   Bool ->
   Bool ->
+  Bool ->
   String
 renderReportJson
   currentReport
@@ -274,6 +204,7 @@ renderReportJson
   curdeRoundTrip
   handleRoundTrip
   allKindsPresent
+  missingImplementationRejected
   succeeded =
     jsonObject
       [ ("schema", jsonString (renderSchemaId (curdeSemanticsReportSchema currentReport)))
@@ -283,9 +214,18 @@ renderReportJson
         , jsonObject
             [ ("effectSystemCount", show (2 :: Int))
             , ("handleKinds", jsonArray (map (jsonString . show) [C, U, R, D, E]))
-            , ("astDemandLeaf", jsonString (renderHandleId (handleId emitAuditHandle)))
-            , ("crossChainRead", jsonString (renderHandleId (handleId readUserHandle)))
-            , ("crossChainConsumer", jsonString (renderHandleId (handleId updateUserHandle)))
+            , ( "astDemandLeaf"
+              , jsonString
+                  (renderHandleId (handleId selfEmitAuditHandle))
+              )
+            , ( "crossChainRead"
+              , jsonString
+                  (renderHandleId (handleId selfReadUserHandle))
+              )
+            , ( "crossChainConsumer"
+              , jsonString
+                  (renderHandleId (handleId selfUpdateUserHandle))
+              )
             ]
         )
       , ( "witnessChecks"
@@ -296,6 +236,9 @@ renderReportJson
             , ("genericRecordCompileTime", jsonBool True)
             , ("typedHandleReuseCompileTime", jsonBool True)
             , ("publicFacadeCompileTime", jsonBool True)
+            , ( "missingImplementationRejected"
+              , jsonBool missingImplementationRejected
+              )
             ]
         )
       , ( "claimManifest"

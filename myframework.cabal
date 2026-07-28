@@ -25,10 +25,20 @@ library
       MyFramework.Legacy.Migration
       MyFramework.Runtime
       MyFramework.Runtime.Diagnosis
+      MyFramework.Recursion
       MyFramework.SDK.SourceArtifact
+      MyFramework.SDK.Package
+      MyFramework.Self.Artifact
+      MyFramework.Self.CoreModel
+      MyFramework.Self.ControlTrace
+      MyFramework.Self.Model
+      MyFramework.TrustBase.Core
+      MyFramework.TrustBase.Digest
       MyFramework.TrustBase.Evidence
       MyFramework.TrustBase.FixedPoint
       MyFramework.TrustBase.Manifest
+      MyFramework.TrustBase.Promotion
+      MyFramework.TrustBase.Self
       MyFramework.TrustBase.Types
   other-modules:
       MyFramework.Control
@@ -37,7 +47,6 @@ library
       MyFramework.CURDE.Lowering
       MyFramework.CURDE.Types
       MyFramework.CURDE.Validate
-      MyFramework.Recursion
       MyFramework.Runtime.Branch
       MyFramework.Runtime.Cancellation
       MyFramework.Runtime.Concurrent
@@ -50,10 +59,14 @@ library
       MyFramework.Runtime.State
       MyFramework.Runtime.Types
       MyFramework.Runtime.Value
+      MyFramework.TrustBase.Json
   default-language: Haskell2010
   build-depends:
-      base >=4.18 && <5
+      array
+    , base >=4.18 && <5
     , containers
+    , directory
+    , filepath
   ghc-options:
       -Wall
       -Wcompat
@@ -92,6 +105,83 @@ executable curde-runtime-witness
   ghc-options:
       -Wall
       -threaded
+
+executable self-artifact-tool
+  hs-source-dirs: app
+  main-is: SelfArtifactTool.hs
+  default-language: Haskell2010
+  build-depends:
+      base >=4.18 && <5
+    , directory
+    , myframework
+  ghc-options:
+      -Wall
+
+executable trustbase-binding-witness
+  hs-source-dirs: app
+  main-is: TrustBaseBindingWitness.hs
+  default-language: Haskell2010
+  build-depends:
+      base >=4.18 && <5
+    , myframework
+  ghc-options:
+      -Wall
+
+executable core-promotion-tool
+  hs-source-dirs: app
+  main-is: CorePromotionTool.hs
+  default-language: Haskell2010
+  build-depends:
+      base >=4.18 && <5
+    , directory
+    , filepath
+    , myframework
+  ghc-options:
+      -Wall
+
+executable sdk-lower-tool
+  hs-source-dirs: app
+  main-is: SdkLowerTool.hs
+  default-language: Haskell2010
+  build-depends:
+      base >=4.18 && <5
+    , directory
+    , filepath
+    , myframework
+  ghc-options:
+      -Wall
+
+executable sdk-package-witness
+  hs-source-dirs: app
+  main-is: SdkPackageWitness.hs
+  default-language: Haskell2010
+  build-depends:
+      base >=4.18 && <5
+    , directory
+    , filepath
+    , myframework
+  ghc-options:
+      -Wall
+
+executable core-promotion-witness
+  hs-source-dirs: app
+  main-is: CorePromotionWitness.hs
+  default-language: Haskell2010
+  build-depends:
+      base >=4.18 && <5
+    , myframework
+  ghc-options:
+      -Wall
+
+executable core-self-interpret-witness
+  hs-source-dirs: app
+  main-is: CoreSelfInterpretWitness.hs
+  default-language: Haskell2010
+  build-depends:
+      base >=4.18 && <5
+    , myframework
+  ghc-options:
+      -Wall
 
 source-repository head
   type: git

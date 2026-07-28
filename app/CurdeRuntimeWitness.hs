@@ -93,6 +93,7 @@ runAllScenarios = do
   goodChecks <- runObservationSuccess
   failureChecks <- runObservationFailure
   parallelChecks <- runParallelSingleFlight
+  inputProofChecks <- runInputProofRejection
   safeFallbackChecks <- runSafeFallback
   unsafeFallbackChecks <- runUnsafeFallback
   controlChecks <- runControlAndHanging
@@ -101,6 +102,7 @@ runAllScenarios = do
     ( goodChecks
         ++ failureChecks
         ++ parallelChecks
+        ++ inputProofChecks
         ++ safeFallbackChecks
         ++ unsafeFallbackChecks
         ++ controlChecks
@@ -303,7 +305,7 @@ runObservationSuccess = do
             withSource
         registerU
           targetHandle
-          ( discardingCommandHandler
+          ( discardingCommandHandlerUsingInput
               integerCodec
               ( \currentInput currentArgument -> do
                   modifyIORef' targetArguments (++ [currentArgument])
@@ -311,7 +313,7 @@ runObservationSuccess = do
                     ( if handlerUses
                           (handleId sourceHandle)
                           currentInput
-                        then Right ()
+                        then useHandlerInput currentInput ()
                         else
                           Left
                             ( runtimeFailure
@@ -436,11 +438,11 @@ runObservationFailure = do
             withSource
         registerU
           targetHandle
-          ( discardingCommandHandler
+          ( discardingCommandHandlerUsingInput
               integerCodec
-              ( \_ _ -> do
+              ( \currentInput _ -> do
                   modifyIORef' targetCount (+ 1)
-                  pure (Right ())
+                  pure (useHandlerInput currentInput ())
               )
           )
           withRead
@@ -574,13 +576,13 @@ runParallelSingleFlight = do
               pure (Right ())
           )
       consumerHandler =
-        discardingCommandHandler
+        discardingCommandHandlerUsingInput
           unitValueCodec
           ( \currentInput () -> do
               if handlerUses (handleId sourceHandle) currentInput
                 then do
                   modifyIORef' consumerUseCount (+ 1)
-                  pure (Right ())
+                  pure (useHandlerInput currentInput ())
                 else
                   pure
                     ( Left
@@ -633,6 +635,48 @@ runParallelSingleFlight = do
     currentFailure ->
       pure
         [failedCheck "parallel.prepare" "prepared runtime and handler registry" (showPreparedRegistry currentFailure)]
+
+runInputProofRejection :: IO [Check]
+runInputProofRejection =
+  pure
+    [ boolCheck
+        "handler.input-proof-required"
+        True
+        prooflessRejected
+    , boolCheck
+        "handler.input-proof-unexpected"
+        True
+        proofUnexpected
+    ]
+  where
+    currentName =
+      EffectSystemName "runtime-input-proof"
+    sourceHandle =
+      c @"proofSource" currentName (unitCommandSpec Nothing)
+    dependentHandle =
+      e @"proofDependent"
+        currentName
+        (unitCommandSpec (Just (SomeHandleRef sourceHandle)))
+    rootHandle =
+      e @"proofRoot" currentName (unitCommandSpec Nothing)
+    prooflessHandler =
+      discardingCommandHandler
+        unitValueCodec
+        (\_ () -> pure (Right ()))
+    proofHandler =
+      discardingCommandHandlerUsingInput
+        unitValueCodec
+        ( \currentInput () ->
+            pure (useHandlerInput currentInput ())
+        )
+    prooflessRejected =
+      case registerE dependentHandle prooflessHandler emptyHandlerRegistry of
+        Left (HandlerInputUseProofMismatch _ True False) -> True
+        _ -> False
+    proofUnexpected =
+      case registerE rootHandle proofHandler emptyHandlerRegistry of
+        Left (HandlerInputUseProofMismatch _ False True) -> True
+        _ -> False
 
 runSafeFallback :: IO [Check]
 runSafeFallback = do

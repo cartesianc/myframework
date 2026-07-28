@@ -1,0 +1,148 @@
+name: Build beta SDK
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdk_version:
+        description: SDK prerelease version
+        required: true
+        default: 0.1.0-beta.1
+        type: string
+      publish_release:
+        description: Publish the verified archive as a GitHub prerelease
+        required: true
+        default: false
+        type: boolean
+      release_tag:
+        description: GitHub prerelease tag used when publishing
+        required: true
+        default: sdk-v0.1.0-beta.1
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-beta-sdk:
+    name: Verify core and build beta SDK
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install GHC and Stack
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.6.7'
+          enable-stack: true
+          stack-version: latest
+
+      - name: Require an explicitly approved current core
+        shell: pwsh
+        run: |
+          $required = @(
+            'trustbase/core-manifest.json',
+            'trustbase/promotion.approved.json',
+            'trustbase/current.json'
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "approved core input is missing: $path"
+            }
+          }
+
+      - name: Run release and one-shot self-artifact gates
+        shell: pwsh
+        run: .\scripts\check-release.ps1 -IncludeSelfArtifact
+
+      - name: Bind approved record to fresh gate evidence
+        shell: pwsh
+        run: |
+          stack --work-dir .stack-work-codex exec core-promotion-tool -- `
+            verify `
+            trustbase/core-manifest.json `
+            trustbase/promotion.approved.json `
+            .generated/stage1-framework/.generated/evidence/self-interpret.json `
+            .generated/pre-gate-evidence/stage1-stage2-artifact-fixed-point.json `
+            .generated/stage1-framework/.generated/evidence/self-interpret.json
+
+      - name: Materialize SDK from approved core
+        shell: pwsh
+        env:
+          SDK_VERSION: ${{ inputs.sdk_version }}
+        run: |
+          if ($env:SDK_VERSION -notmatch '^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$') {
+            throw "invalid SDK version: $env:SDK_VERSION"
+          }
+          stack --work-dir .stack-work-codex exec sdk-lower-tool -- `
+            materialize `
+            . `
+            .generated/sdk-beta `
+            $env:SDK_VERSION `
+            trustbase/core-manifest.json `
+            trustbase/promotion.approved.json `
+            trustbase/current.json
+
+      - name: Verify generated SDK manifest and core lock
+        shell: pwsh
+        run: >-
+          stack --work-dir .stack-work-codex exec sdk-lower-tool --
+          verify .generated/sdk-beta
+
+      - name: Create beta SDK archive
+        shell: pwsh
+        env:
+          SDK_VERSION: ${{ inputs.sdk_version }}
+        run: |
+          $archive = ".generated/myframework-sdk-$env:SDK_VERSION.zip"
+          Compress-Archive -Path '.generated/sdk-beta' -DestinationPath $archive
+      - name: Build generated SDK independently
+        shell: pwsh
+        working-directory: .generated/sdk-beta
+        run: stack --work-dir .stack-work-sdk build
+
+      - name: Run SDK package witness independently
+        shell: pwsh
+        working-directory: .generated/sdk-beta
+        run: stack --work-dir .stack-work-sdk exec sdk-package-witness
+
+
+      - name: Upload verified beta SDK
+        uses: actions/upload-artifact@v4
+        with:
+          name: myframework-sdk-${{ inputs.sdk_version }}
+          path: .generated/myframework-sdk-${{ inputs.sdk_version }}.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-prerelease:
+    name: Publish GitHub prerelease
+    if: ${{ inputs.publish_release }}
+    needs: build-beta-sdk
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified beta SDK
+        uses: actions/download-artifact@v4
+        with:
+          name: myframework-sdk-${{ inputs.sdk_version }}
+          path: dist
+
+      - name: Publish prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SDK_VERSION: ${{ inputs.sdk_version }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^[0-9A-Za-z][0-9A-Za-z._/-]{0,127}$' -or $env:RELEASE_TAG.Contains('..')) {
+            throw "invalid release tag: $env:RELEASE_TAG"
+          }
+          gh release create $env:RELEASE_TAG `
+            "dist/myframework-sdk-$env:SDK_VERSION.zip" `
+            --prerelease `
+            --target $env:GITHUB_SHA `
+            --title "MyFramework SDK $env:SDK_VERSION" `
+            --notes 'Generated only after approved-core, release, self-artifact, SDK manifest, independent build, and SDK witness gates passed.'

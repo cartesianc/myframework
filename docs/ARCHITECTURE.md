@@ -114,18 +114,37 @@ changing its successful execution status.
 
 ## SDK source artifact
 
-`MyFramework.SDK.SourceArtifact` is an opt-in projection over the existing
-erased Effect System declarations and serializable AST seed. It is not
-re-exported by `MyFramework`, so the three authoring surfaces remain unchanged.
-The projection is pure, keeps Handler implementations runtime-only, and emits
-only deterministic typed, JSON, and generated-source provenance artifacts.
+`MyFramework.SDK.SourceArtifact` canonically commits the existing erased Effect
+System declarations, serializable AST seed, and optional Handler identity
+coverage to an explicit `SdkCoreLock`. The surface and lowering digests are
+validated before any files are written. Handler implementations remain
+runtime-only, and no fourth business-authoring surface is introduced.
 
-It neither interprets the AST nor extends the recursion kernel. `Fix` and
-`cata` remain the only implemented recursion-scheme contract; protocol-driven
-unfolding remains reserved for the future JSON-RPC boot framework.
+`MyFramework.SDK.Package` accepts only a `CoreManifest`, approved
+`PromotionRecord`, and matching `CurrentCorePointer`. It materializes the
+complete standalone source closure, embeds the approved records and lock, and
+records every generated file digest. Verification rechecks both the base
+artifact payload and the package files. A pending or mismatched core cannot be
+used for SDK generation.
+
+Neither module extends the recursion kernel. `Fix` and `cata` remain the only
+implemented recursion-scheme contract; protocol-driven unfolding remains
+reserved for the future JSON-RPC boot framework.
 
 ## TrustBase
 
-TrustBase migration includes stable schema identifiers, evidence claims,
-manifest validation, and Stage 0 / Stage 1 fixed-point comparison. It does not
-copy legacy facade/runtime structure or release commands.
+The permanent host boundary and rotating framework core are separate.
+`TrustBaseRef` is serializable identity; `BoundTrustBase` is the existential
+runtime capability loaded only after the closed `HostKernel` verifies core,
+artifact, manifest, schema, and claim identities. The normal business facade
+never receives either value.
+
+`FrameworkAsBusiness` uses the normal CURDE/AST/Handler contracts and accepts
+`EmptyBusiness` as the nullary recursive base. The semantic witness compares
+core0 and core1 normalized observations and rejects any candidate runtime
+back-reference to core0. The artifact witness independently proves the
+Stage1/Stage2 source fixed point.
+
+Validation creates only a pending promotion record. Switching
+`trustbase/current.json` requires an explicit approved record after the heavy
+gate; normal builds and CI never perform that switch.

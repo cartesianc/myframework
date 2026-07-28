@@ -3,10 +3,12 @@ module MyFramework.TrustBase.FixedPoint
   , FixedPointReport (..)
   , FixedPointStatus (..)
   , StageDiffKey (..)
-  , StageEvidence (..)
+  , StageEvidence
+  , StageEvidenceCollectionError (..)
   , StageValue (..)
   , buildFixedPointReport
   , canonicalStageEvidence
+  , collectStageEvidence
   , diffStageEvidence
   , fixedPointDiffClaimName
   , fixedPointDiffKeyName
@@ -14,13 +16,48 @@ module MyFramework.TrustBase.FixedPoint
   , fixedPointPassed
   , fixedPointReportSchemaV1
   , fixedPointSummarySchemaV1
+  , renderStageEvidenceJson
+  , stageEvidenceArtifactManifestDigest
+  , stageEvidenceControlPlanDigest
+  , stageEvidenceFacadeLoweringDigest
+  , stageEvidenceFailures
+  , stageEvidenceName
+  , stageEvidenceRuntimeWitnessDigest
+  , stageEvidenceSelfModelDigest
+  , stageEvidenceSemanticWitnessDigest
+  , stageEvidenceStatus
   , stageValue
   ) where
 
-import Data.List
-  ( sort
+import Control.Exception
+  ( IOException
+  , try
   )
-
+import Data.Char
+  ( ord )
+import Data.List
+  ( intercalate
+  , isInfixOf
+  , sort
+  )
+import Numeric
+  ( showHex )
+import MyFramework.Self.Artifact
+  ( ArtifactError
+  , ArtifactManifest (..)
+  , verifyArtifactManifest
+  )
+import MyFramework.Self.ControlTrace
+  ( compileControlTrace
+  , renderControlTraceJson
+  )
+import MyFramework.Self.Model
+  ( canonicalSelfModelJson
+  , encodeSelfModel
+  , selfModel
+  )
+import MyFramework.TrustBase.Digest
+  ( sha256 )
 import MyFramework.TrustBase.Types
   ( ClaimName (..)
   , EvidenceStatus (..)
@@ -29,47 +66,45 @@ import MyFramework.TrustBase.Types
   , SchemaVersion (..)
   )
 
+-- | The constructor is intentionally not exported. Evidence can only be
+-- collected from the framework's actual SelfModel, witness files and verified
+-- artifact manifest.
 data StageEvidence = StageEvidence
   { stageEvidenceName :: String
   , stageEvidenceStatus :: EvidenceStatus
-  , stageEvidenceSurfaceModules :: Int
-  , stageEvidenceSurfaceCapabilities :: Int
-  , stageEvidenceConstraintTotal :: Int
-  , stageEvidenceConstraintFailed :: Int
-  , stageEvidenceDeclaredFacts :: [String]
-  , stageEvidenceRootFacts :: [String]
-  , stageEvidencePlannedRuntimeFacts :: [String]
-  , stageEvidenceFinalRuntimeFacts :: [String]
-  , stageEvidenceMissingFinalFacts :: [String]
-  , stageEvidenceExtraFinalFacts :: [String]
-  , stageEvidenceHandlerCoverage :: [String]
-  , stageEvidenceArtifactTypes :: [String]
+  , stageEvidenceSelfModelDigest :: String
+  , stageEvidenceControlPlanDigest :: String
+  , stageEvidenceFacadeLoweringDigest :: String
+  , stageEvidenceSemanticWitnessDigest :: String
+  , stageEvidenceRuntimeWitnessDigest :: String
+  , stageEvidenceArtifactManifestDigest :: String
   , stageEvidenceFailures :: [String]
   }
   deriving (Eq, Show)
 
--- | These constructors and their order are the stable fixed-point diff schema.
--- Stage names are provenance only and intentionally do not appear here.
+data StageEvidenceCollectionError
+  = StageEvidenceSelfModelFailed String
+  | StageEvidenceControlPlanFailed String
+  | StageEvidenceReadFailed FilePath String
+  | StageEvidenceSemanticWitnessInvalid FilePath
+  | StageEvidenceRuntimeWitnessInvalid FilePath
+  | StageEvidenceArtifactInvalid FilePath [ArtifactError]
+  deriving (Eq, Show)
+
 data StageDiffKey
   = StageStatusKey
-  | SurfaceModulesKey
-  | SurfaceCapabilitiesKey
-  | ConstraintTotalKey
-  | ConstraintFailedKey
-  | DeclaredFactsKey
-  | RootFactsKey
-  | PlannedRuntimeFactsKey
-  | FinalRuntimeFactsKey
-  | MissingFinalFactsKey
-  | ExtraFinalFactsKey
-  | HandlerCoverageKey
-  | ArtifactTypesKey
+  | SelfModelDigestKey
+  | ControlPlanDigestKey
+  | FacadeLoweringDigestKey
+  | SemanticWitnessDigestKey
+  | RuntimeWitnessDigestKey
+  | ArtifactManifestDigestKey
   | FailuresKey
   deriving (Eq, Ord, Show)
 
 data StageValue
   = StageStatusValue EvidenceStatus
-  | StageCountValue Int
+  | StageDigestValue String
   | StageNamesValue [String]
   deriving (Eq, Show)
 
@@ -110,125 +145,237 @@ fixedPointSummarySchemaV1 =
 fixedPointDiffKeys :: [StageDiffKey]
 fixedPointDiffKeys =
   [ StageStatusKey
-  , SurfaceModulesKey
-  , SurfaceCapabilitiesKey
-  , ConstraintTotalKey
-  , ConstraintFailedKey
-  , DeclaredFactsKey
-  , RootFactsKey
-  , PlannedRuntimeFactsKey
-  , FinalRuntimeFactsKey
-  , MissingFinalFactsKey
-  , ExtraFinalFactsKey
-  , HandlerCoverageKey
-  , ArtifactTypesKey
+  , SelfModelDigestKey
+  , ControlPlanDigestKey
+  , FacadeLoweringDigestKey
+  , SemanticWitnessDigestKey
+  , RuntimeWitnessDigestKey
+  , ArtifactManifestDigestKey
   , FailuresKey
   ]
 
 fixedPointDiffKeyName :: StageDiffKey -> String
-fixedPointDiffKeyName key =
-  case key of
+fixedPointDiffKeyName currentKey =
+  case currentKey of
     StageStatusKey -> "status"
-    SurfaceModulesKey -> "surface modules"
-    SurfaceCapabilitiesKey -> "surface capabilities"
-    ConstraintTotalKey -> "constraint total"
-    ConstraintFailedKey -> "constraint failed"
-    DeclaredFactsKey -> "declared facts"
-    RootFactsKey -> "root facts"
-    PlannedRuntimeFactsKey -> "planned runtime facts"
-    FinalRuntimeFactsKey -> "final runtime facts"
-    MissingFinalFactsKey -> "missing final facts"
-    ExtraFinalFactsKey -> "extra final facts"
-    HandlerCoverageKey -> "handler coverage"
-    ArtifactTypesKey -> "artifact types"
+    SelfModelDigestKey -> "self model digest"
+    ControlPlanDigestKey -> "control plan digest"
+    FacadeLoweringDigestKey -> "facade lowering digest"
+    SemanticWitnessDigestKey -> "semantic witness digest"
+    RuntimeWitnessDigestKey -> "runtime witness digest"
+    ArtifactManifestDigestKey -> "artifact manifest digest"
     FailuresKey -> "failures"
 
 fixedPointDiffClaimName :: StageDiffKey -> ClaimName
-fixedPointDiffClaimName key =
+fixedPointDiffClaimName currentKey =
   ClaimName
-    ( case key of
+    ( case currentKey of
         StageStatusKey -> "fixed-point-diff-status"
-        SurfaceModulesKey -> "fixed-point-diff-surface-modules"
-        SurfaceCapabilitiesKey -> "fixed-point-diff-surface-capabilities"
-        ConstraintTotalKey -> "fixed-point-diff-constraint-total"
-        ConstraintFailedKey -> "fixed-point-diff-constraint-failed"
-        DeclaredFactsKey -> "fixed-point-diff-declared-facts"
-        RootFactsKey -> "fixed-point-diff-root-facts"
-        PlannedRuntimeFactsKey -> "fixed-point-diff-planned-runtime-facts"
-        FinalRuntimeFactsKey -> "fixed-point-diff-final-runtime-facts"
-        MissingFinalFactsKey -> "fixed-point-diff-missing-final-facts"
-        ExtraFinalFactsKey -> "fixed-point-diff-extra-final-facts"
-        HandlerCoverageKey -> "fixed-point-diff-handler-coverage"
-        ArtifactTypesKey -> "fixed-point-diff-artifact-types"
+        SelfModelDigestKey -> "fixed-point-diff-self-model"
+        ControlPlanDigestKey -> "fixed-point-diff-control-plan"
+        FacadeLoweringDigestKey -> "fixed-point-diff-facade-lowering"
+        SemanticWitnessDigestKey -> "fixed-point-diff-semantic-witness"
+        RuntimeWitnessDigestKey -> "fixed-point-diff-runtime-witness"
+        ArtifactManifestDigestKey -> "fixed-point-diff-artifact-manifest"
         FailuresKey -> "fixed-point-diff-failures"
     )
 
+collectStageEvidence ::
+  String ->
+  FilePath ->
+  FilePath ->
+  FilePath ->
+  IO (Either [StageEvidenceCollectionError] StageEvidence)
+collectStageEvidence
+  currentName
+  semanticWitnessPath
+  runtimeWitnessPath
+  artifactRoot =
+    case selfModel of
+      Left currentErrors ->
+        pure
+          (Left [StageEvidenceSelfModelFailed (show currentErrors)])
+      Right currentModel ->
+        case compileControlTrace currentModel of
+          Left currentError ->
+            pure
+              (Left [StageEvidenceControlPlanFailed (show currentError)])
+          Right currentControlTrace -> do
+            semanticResult <- readEvidenceFile semanticWitnessPath
+            runtimeResult <- readEvidenceFile runtimeWitnessPath
+            artifactResult <- verifyArtifactManifest artifactRoot
+            let collectionErrors =
+                  semanticErrors semanticWitnessPath semanticResult
+                    ++ runtimeErrors runtimeWitnessPath runtimeResult
+                    ++ artifactErrors artifactRoot artifactResult
+            pure
+              ( case
+                    ( collectionErrors
+                    , semanticResult
+                    , runtimeResult
+                    , artifactResult
+                    ) of
+                  ([], Right semanticText, Right runtimeText, Right currentManifest) ->
+                    Right
+                      StageEvidence
+                        { stageEvidenceName = currentName
+                        , stageEvidenceStatus = EvidencePassed
+                        , stageEvidenceSelfModelDigest =
+                            sha256 (encodeSelfModel currentModel)
+                        , stageEvidenceControlPlanDigest =
+                            sha256
+                              (renderControlTraceJson currentControlTrace)
+                        , stageEvidenceFacadeLoweringDigest =
+                            sha256 (canonicalSelfModelJson currentModel)
+                        , stageEvidenceSemanticWitnessDigest =
+                            sha256 semanticText
+                        , stageEvidenceRuntimeWitnessDigest =
+                            sha256 runtimeText
+                        , stageEvidenceArtifactManifestDigest =
+                            artifactManifestPayloadDigest currentManifest
+                        , stageEvidenceFailures = []
+                        }
+                  _ ->
+                    Left collectionErrors
+              )
+
+readEvidenceFile ::
+  FilePath ->
+  IO (Either StageEvidenceCollectionError String)
+readEvidenceFile currentPath = do
+  currentResult <-
+    try (readFile currentPath) :: IO (Either IOException String)
+  pure
+    ( case currentResult of
+        Left currentError ->
+          Left
+            (StageEvidenceReadFailed currentPath (show currentError))
+        Right currentText ->
+          Right currentText
+    )
+
+semanticErrors ::
+  FilePath ->
+  Either StageEvidenceCollectionError String ->
+  [StageEvidenceCollectionError]
+semanticErrors currentPath currentResult =
+  case currentResult of
+    Left currentError ->
+      [currentError]
+    Right currentText
+      | semanticWitnessValid currentText ->
+          []
+      | otherwise ->
+          [StageEvidenceSemanticWitnessInvalid currentPath]
+
+runtimeErrors ::
+  FilePath ->
+  Either StageEvidenceCollectionError String ->
+  [StageEvidenceCollectionError]
+runtimeErrors currentPath currentResult =
+  case currentResult of
+    Left currentError ->
+      [currentError]
+    Right currentText
+      | runtimeWitnessValid currentText ->
+          []
+      | otherwise ->
+          [StageEvidenceRuntimeWitnessInvalid currentPath]
+
+artifactErrors ::
+  FilePath ->
+  Either [ArtifactError] ArtifactManifest ->
+  [StageEvidenceCollectionError]
+artifactErrors currentRoot currentResult =
+  case currentResult of
+    Left currentErrors ->
+      [StageEvidenceArtifactInvalid currentRoot currentErrors]
+    Right _ ->
+      []
+
+semanticWitnessValid :: String -> Bool
+semanticWitnessValid currentText =
+  all
+    (`isInfixOf` currentText)
+    [ "\"schema\":\"curde-semantics-evidence.v1\""
+    , "\"artifact\":\"curde-semantics-witness\""
+    , "\"result\":\"passed\""
+    , "\"exact20Plus1\":true"
+    ]
+    && countSubstring "\"status\":\"established\"" currentText >= 19
+
+runtimeWitnessValid :: String -> Bool
+runtimeWitnessValid currentText =
+  all
+    (`isInfixOf` currentText)
+    [ "\"schema\":\"curde-runtime-witness.v1\""
+    , "\"artifact\":\"curde-runtime-witness\""
+    , "\"result\":\"passed\""
+    ]
+    && countSubstring "\"passed\":true" currentText == 48
+    && not ("\"passed\":false" `isInfixOf` currentText)
+
+countSubstring :: String -> String -> Int
+countSubstring currentNeedle currentHaystack
+  | null currentNeedle =
+      0
+  | otherwise =
+      go currentHaystack
+  where
+    go [] =
+      0
+    go remainingText@(_ : rest)
+      | currentNeedle `isPrefixOfText` remainingText =
+          1 + go (drop (length currentNeedle) remainingText)
+      | otherwise =
+          go rest
+
+isPrefixOfText :: String -> String -> Bool
+isPrefixOfText [] _ =
+  True
+isPrefixOfText _ [] =
+  False
+isPrefixOfText (left : leftRest) (right : rightRest) =
+  left == right && isPrefixOfText leftRest rightRest
+
 canonicalStageEvidence :: StageEvidence -> StageEvidence
-canonicalStageEvidence evidence =
-  evidence
-    { stageEvidenceDeclaredFacts =
-        sort (stageEvidenceDeclaredFacts evidence)
-    , stageEvidenceRootFacts =
-        sort (stageEvidenceRootFacts evidence)
-    , stageEvidencePlannedRuntimeFacts =
-        sort (stageEvidencePlannedRuntimeFacts evidence)
-    , stageEvidenceFinalRuntimeFacts =
-        sort (stageEvidenceFinalRuntimeFacts evidence)
-    , stageEvidenceMissingFinalFacts =
-        sort (stageEvidenceMissingFinalFacts evidence)
-    , stageEvidenceExtraFinalFacts =
-        sort (stageEvidenceExtraFinalFacts evidence)
-    , stageEvidenceHandlerCoverage =
-        sort (stageEvidenceHandlerCoverage evidence)
-    , stageEvidenceArtifactTypes =
-        sort (stageEvidenceArtifactTypes evidence)
-    , stageEvidenceFailures =
-        sort (stageEvidenceFailures evidence)
+canonicalStageEvidence currentEvidence =
+  currentEvidence
+    { stageEvidenceFailures =
+        sort (stageEvidenceFailures currentEvidence)
     }
 
 stageValue :: StageDiffKey -> StageEvidence -> StageValue
-stageValue key evidence =
-  case key of
+stageValue currentKey currentEvidence =
+  case currentKey of
     StageStatusKey ->
-      StageStatusValue (stageEvidenceStatus evidence)
-    SurfaceModulesKey ->
-      StageCountValue (stageEvidenceSurfaceModules evidence)
-    SurfaceCapabilitiesKey ->
-      StageCountValue (stageEvidenceSurfaceCapabilities evidence)
-    ConstraintTotalKey ->
-      StageCountValue (stageEvidenceConstraintTotal evidence)
-    ConstraintFailedKey ->
-      StageCountValue (stageEvidenceConstraintFailed evidence)
-    DeclaredFactsKey ->
-      StageNamesValue (stageEvidenceDeclaredFacts evidence)
-    RootFactsKey ->
-      StageNamesValue (stageEvidenceRootFacts evidence)
-    PlannedRuntimeFactsKey ->
-      StageNamesValue (stageEvidencePlannedRuntimeFacts evidence)
-    FinalRuntimeFactsKey ->
-      StageNamesValue (stageEvidenceFinalRuntimeFacts evidence)
-    MissingFinalFactsKey ->
-      StageNamesValue (stageEvidenceMissingFinalFacts evidence)
-    ExtraFinalFactsKey ->
-      StageNamesValue (stageEvidenceExtraFinalFacts evidence)
-    HandlerCoverageKey ->
-      StageNamesValue (stageEvidenceHandlerCoverage evidence)
-    ArtifactTypesKey ->
-      StageNamesValue (stageEvidenceArtifactTypes evidence)
+      StageStatusValue (stageEvidenceStatus currentEvidence)
+    SelfModelDigestKey ->
+      StageDigestValue (stageEvidenceSelfModelDigest currentEvidence)
+    ControlPlanDigestKey ->
+      StageDigestValue (stageEvidenceControlPlanDigest currentEvidence)
+    FacadeLoweringDigestKey ->
+      StageDigestValue (stageEvidenceFacadeLoweringDigest currentEvidence)
+    SemanticWitnessDigestKey ->
+      StageDigestValue (stageEvidenceSemanticWitnessDigest currentEvidence)
+    RuntimeWitnessDigestKey ->
+      StageDigestValue (stageEvidenceRuntimeWitnessDigest currentEvidence)
+    ArtifactManifestDigestKey ->
+      StageDigestValue (stageEvidenceArtifactManifestDigest currentEvidence)
     FailuresKey ->
-      StageNamesValue (stageEvidenceFailures evidence)
+      StageNamesValue (stageEvidenceFailures currentEvidence)
 
 diffStageEvidence :: StageEvidence -> StageEvidence -> [EvidenceDiff]
 diffStageEvidence stage0 stage1 =
   [ EvidenceDiff
-      { evidenceDiffKey = key
-      , evidenceDiffStage0 = left
-      , evidenceDiffStage1 = right
+      { evidenceDiffKey = currentKey
+      , evidenceDiffStage0 = leftValue
+      , evidenceDiffStage1 = rightValue
       }
-  | key <- fixedPointDiffKeys
-  , let left = stageValue key canonicalStage0
-  , let right = stageValue key canonicalStage1
-  , left /= right
+  | currentKey <- fixedPointDiffKeys
+  , let leftValue = stageValue currentKey canonicalStage0
+  , let rightValue = stageValue currentKey canonicalStage1
+  , leftValue /= rightValue
   ]
   where
     canonicalStage0 =
@@ -239,29 +386,102 @@ diffStageEvidence stage0 stage1 =
 buildFixedPointReport :: StageEvidence -> StageEvidence -> FixedPointReport
 buildFixedPointReport stage0 stage1 =
   FixedPointReport
-    { fixedPointStatus = status
+    { fixedPointStatus = currentStatus
     , fixedPointStage0 = canonicalStage0
     , fixedPointStage1 = canonicalStage1
-    , fixedPointDiffs = diffs
+    , fixedPointDiffs = currentDiffs
     }
   where
     canonicalStage0 =
       canonicalStageEvidence stage0
     canonicalStage1 =
       canonicalStageEvidence stage1
-    diffs =
+    currentDiffs =
       diffStageEvidence canonicalStage0 canonicalStage1
-    status
+    currentStatus
       | stageEvidenceStatus canonicalStage0 == EvidencePassed
           && stageEvidenceStatus canonicalStage1 == EvidencePassed
-          && null diffs =
+          && null currentDiffs =
           FixedPointPassed
       | otherwise =
           FixedPointFailed
 
 fixedPointPassed :: FixedPointReport -> Bool
-fixedPointPassed report =
-  fixedPointStatus report == FixedPointPassed
-    && stageEvidenceStatus (fixedPointStage0 report) == EvidencePassed
-    && stageEvidenceStatus (fixedPointStage1 report) == EvidencePassed
-    && null (fixedPointDiffs report)
+fixedPointPassed currentReport =
+  fixedPointStatus currentReport == FixedPointPassed
+    && stageEvidenceStatus (fixedPointStage0 currentReport)
+      == EvidencePassed
+    && stageEvidenceStatus (fixedPointStage1 currentReport)
+      == EvidencePassed
+    && null (fixedPointDiffs currentReport)
+
+renderStageEvidenceJson :: StageEvidence -> String
+renderStageEvidenceJson currentEvidence =
+  jsonObject
+    [ ("name", jsonString (stageEvidenceName currentEvidence))
+    , ( "status"
+      , jsonString
+          ( case stageEvidenceStatus currentEvidence of
+              EvidencePassed -> "passed"
+              EvidenceFailed -> "failed"
+          )
+      )
+    , ( "selfModelDigest"
+      , jsonString (stageEvidenceSelfModelDigest currentEvidence)
+      )
+    , ( "controlPlanDigest"
+      , jsonString (stageEvidenceControlPlanDigest currentEvidence)
+      )
+    , ( "facadeLoweringDigest"
+      , jsonString (stageEvidenceFacadeLoweringDigest currentEvidence)
+      )
+    , ( "semanticWitnessDigest"
+      , jsonString (stageEvidenceSemanticWitnessDigest currentEvidence)
+      )
+    , ( "runtimeWitnessDigest"
+      , jsonString (stageEvidenceRuntimeWitnessDigest currentEvidence)
+      )
+    , ( "artifactManifestDigest"
+      , jsonString (stageEvidenceArtifactManifestDigest currentEvidence)
+      )
+    , ("failures", jsonArray (map jsonString (stageEvidenceFailures currentEvidence)))
+    ]
+
+jsonObject :: [(String, String)] -> String
+jsonObject currentFields =
+  "{"
+    ++ intercalate
+      ","
+      [ jsonString currentName ++ ":" ++ currentValue
+      | (currentName, currentValue) <- currentFields
+      ]
+    ++ "}"
+
+jsonArray :: [String] -> String
+jsonArray currentValues =
+  "[" ++ intercalate "," currentValues ++ "]"
+
+jsonString :: String -> String
+jsonString currentValue =
+  "\"" ++ concatMap escapeJsonChar currentValue ++ "\""
+
+escapeJsonChar :: Char -> String
+escapeJsonChar currentChar =
+  case currentChar of
+    '"' -> "\\\""
+    '\\' -> "\\\\"
+    '\b' -> "\\b"
+    '\f' -> "\\f"
+    '\n' -> "\\n"
+    '\r' -> "\\r"
+    '\t' -> "\\t"
+    _
+      | ord currentChar < 0x20 ->
+          "\\u" ++ padLeft 4 '0' (showHex (ord currentChar) "")
+      | otherwise ->
+          [currentChar]
+
+padLeft :: Int -> Char -> String -> String
+padLeft currentWidth currentFill currentValue =
+  replicate (max 0 (currentWidth - length currentValue)) currentFill
+    ++ currentValue

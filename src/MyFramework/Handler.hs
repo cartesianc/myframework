@@ -9,6 +9,7 @@ module MyFramework.Handler
   , FailurePhase (..)
   , HandlerInput
   , HandlerRegistry
+  , InputUsed
   , ObservationCapture (..)
   , ReadHandler
   , ReadInvocation (..)
@@ -24,8 +25,10 @@ module MyFramework.Handler
   , ValueCodec (..)
   , ValueTag
   , commandHandler
+  , commandHandlerUsingInput
   , decodeWithCodec
   , discardingCommandHandler
+  , discardingCommandHandlerUsingInput
   , emptyHandlerRegistry
   , encodeWithCodec
   , encodeRegisteredReadValue
@@ -40,6 +43,7 @@ module MyFramework.Handler
   , normalizeRegisteredReadData
   , readCodec
   , readHandler
+  , readHandlerUsingInput
   , registerC
   , registerD
   , registerE
@@ -50,6 +54,7 @@ module MyFramework.Handler
   , someRuntimeValueSchema
   , someRuntimeValueText
   , typedValueCodec
+  , useHandlerInput
   , unitValueCodec
   , validateRuntimeData
   , valueTag
@@ -107,6 +112,7 @@ import MyFramework.Runtime.Value
 data CommandHandler args observation = CommandHandler
   { commandArgumentCodec :: ValueCodec args
   , commandObservationCodec :: Maybe (ValueCodec observation)
+  , commandUsesInputProof :: Bool
   , runCommand ::
       HandlerInput ->
       args ->
@@ -115,9 +121,13 @@ data CommandHandler args observation = CommandHandler
 
 data ReadHandler value = ReadHandler
   { readResultCodec :: ValueCodec value
+  , readUsesInputProof :: Bool
   , readAction ::
       Maybe (HandlerInput -> IO (Either RuntimeFailure value))
   }
+
+-- | Opaque evidence that a handler deliberately consumed the runtime input.
+data InputUsed value = InputUsed HandleId value
 
 data SomeCommandHandler where
   SomeCommandHandler ::
@@ -143,6 +153,7 @@ data RegistryError
   | ReadSourceMissing HandleId
   | ReadHandlerRequired HandleId
   | ReadHandlerNotAllowed HandleId ReadSource
+  | HandlerInputUseProofMismatch HandleId Bool Bool
   deriving (Eq, Show)
 
 data ObservationCapture
@@ -174,11 +185,34 @@ commandHandler argumentCodec observationCodec currentAction =
   CommandHandler
     { commandArgumentCodec = argumentCodec
     , commandObservationCodec = Just observationCodec
+    , commandUsesInputProof = False
     , runCommand =
         \currentInput currentArguments ->
           fmap
             (fmap Just)
             (currentAction currentInput currentArguments)
+    }
+
+commandHandlerUsingInput ::
+  ValueCodec args ->
+  ValueCodec observation ->
+  (HandlerInput ->
+    args ->
+    IO (Either RuntimeFailure (InputUsed observation))) ->
+  CommandHandler args observation
+commandHandlerUsingInput argumentCodec observationCodec currentAction =
+  CommandHandler
+    { commandArgumentCodec = argumentCodec
+    , commandObservationCodec = Just observationCodec
+    , commandUsesInputProof = True
+    , runCommand =
+        \currentInput currentArguments -> do
+          currentResult <- currentAction currentInput currentArguments
+          pure
+            ( currentResult
+                >>= validateInputUseProof currentInput
+                >>= (Right . Just)
+            )
     }
 
 -- | Constructor for DiscardObservation. The action returns no observation
@@ -193,11 +227,33 @@ discardingCommandHandler argumentCodec currentAction =
   CommandHandler
     { commandArgumentCodec = argumentCodec
     , commandObservationCodec = Nothing
+    , commandUsesInputProof = False
     , runCommand =
         \currentInput currentArguments ->
           fmap
             (fmap (const Nothing))
             (currentAction currentInput currentArguments)
+    }
+
+discardingCommandHandlerUsingInput ::
+  ValueCodec args ->
+  (HandlerInput ->
+    args ->
+    IO (Either RuntimeFailure (InputUsed ()))) ->
+  CommandHandler args NoObservation
+discardingCommandHandlerUsingInput argumentCodec currentAction =
+  CommandHandler
+    { commandArgumentCodec = argumentCodec
+    , commandObservationCodec = Nothing
+    , commandUsesInputProof = True
+    , runCommand =
+        \currentInput currentArguments -> do
+          currentResult <- currentAction currentInput currentArguments
+          pure
+            ( currentResult
+                >>= validateInputUseProof currentInput
+                >>= (Right . const Nothing)
+            )
     }
 
 readHandler ::
@@ -207,13 +263,31 @@ readHandler ::
 readHandler currentCodec currentAction =
   ReadHandler
     { readResultCodec = currentCodec
+    , readUsesInputProof = False
     , readAction = Just currentAction
+    }
+
+readHandlerUsingInput ::
+  ValueCodec value ->
+  (HandlerInput -> IO (Either RuntimeFailure (InputUsed value))) ->
+  ReadHandler value
+readHandlerUsingInput currentCodec currentAction =
+  ReadHandler
+    { readResultCodec = currentCodec
+    , readUsesInputProof = True
+    , readAction =
+        Just
+          ( \currentInput -> do
+              currentResult <- currentAction currentInput
+              pure (currentResult >>= validateInputUseProof currentInput)
+          )
     }
 
 readCodec :: ValueCodec value -> ReadHandler value
 readCodec currentCodec =
   ReadHandler
     { readResultCodec = currentCodec
+    , readUsesInputProof = False
     , readAction = Nothing
     }
 
@@ -306,7 +380,7 @@ validateReadRegistration currentHandle currentHandler =
     (Just ReadFromHandler, Nothing) ->
       Left (ReadHandlerRequired currentId)
     (Just ReadFromHandler, Just _) ->
-      Right ()
+      validateReadInputUse currentHandle currentHandler
     (Just currentSource, Just _) ->
       Left (ReadHandlerNotAllowed currentId currentSource)
     (Just _, Nothing) ->
@@ -314,6 +388,26 @@ validateReadRegistration currentHandle currentHandler =
   where
     currentId =
       handleId currentHandle
+
+validateReadInputUse ::
+  Handle name 'R () value ->
+  ReadHandler value ->
+  Either RegistryError ()
+validateReadInputUse currentHandle currentHandler
+  | expectedUse == readUsesInputProof currentHandler =
+      Right ()
+  | otherwise =
+      Left
+        ( HandlerInputUseProofMismatch
+            (handleId currentHandle)
+            expectedUse
+            (readUsesInputProof currentHandler)
+        )
+  where
+    expectedUse =
+      case handleInput currentHandle of
+        Nothing -> False
+        Just _ -> True
 
 registerCommand ::
   Handle name kind args observation ->
@@ -333,6 +427,7 @@ registerCommand currentHandle currentHandler currentRegistry
       Left (DuplicateHandler currentId)
   | otherwise = do
       validateObservationRegistration currentHandle currentHandler
+      validateCommandInputUse currentHandle currentHandler
       Right
         currentRegistry
           { registryCommandHandlers =
@@ -432,6 +527,58 @@ encodeRegisteredReadValue ::
 encodeRegisteredReadValue currentRegistry currentId =
   normalizeRegisteredReadData currentRegistry currentId
     . RuntimeOpaque
+
+validateCommandInputUse ::
+  Handle name kind args observation ->
+  CommandHandler args observation ->
+  Either RegistryError ()
+validateCommandInputUse currentHandle currentHandler
+  | expectedUse == commandUsesInputProof currentHandler =
+      Right ()
+  | otherwise =
+      Left
+        ( HandlerInputUseProofMismatch
+            (handleId currentHandle)
+            expectedUse
+            (commandUsesInputProof currentHandler)
+        )
+  where
+    expectedUse =
+      case handleInput currentHandle of
+        Nothing -> False
+        Just _ -> True
+
+useHandlerInput ::
+  HandlerInput ->
+  value ->
+  Either RuntimeFailure (InputUsed value)
+useHandlerInput currentInput currentValue =
+  case handlerInputHandleId currentInput of
+    Nothing ->
+      Left
+        RuntimeFailure
+          { runtimeFailurePhase = DependencyPhase
+          , runtimeFailureCommitState = NoExternalCommit
+          , runtimeFailureMessage =
+              "handler attempted to prove use without a declared input"
+          }
+    Just currentId ->
+      Right (InputUsed currentId currentValue)
+
+validateInputUseProof ::
+  HandlerInput ->
+  InputUsed value ->
+  Either RuntimeFailure value
+validateInputUseProof currentInput (InputUsed proofId currentValue)
+  | handlerInputHandleId currentInput == Just proofId =
+      Right currentValue
+  | otherwise =
+      Left
+        RuntimeFailure
+          { runtimeFailurePhase = DependencyPhase
+          , runtimeFailureCommitState = NoExternalCommit
+          , runtimeFailureMessage = "handler input use proof mismatch"
+          }
 
 invokeSomeCommand ::
   SomeCommandHandler ->

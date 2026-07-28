@@ -7,11 +7,19 @@ module MyFramework.TrustBase.Evidence
   , evidenceFor
   , fixedPointDiffClaimCatalog
   , fixedPointDiffEvidenceSchemaV1
+  , promotionClaimCatalog
+  , promotionEvidenceSchemaV1
+  , sdkPackageClaimCatalog
+  , sdkPackageEvidenceSchemaV1
   , schemaCatalogClaimCatalog
   , schemaCatalogClaimName
   , schemaCatalogEvidenceSchemaV1
+  , selfInterpretClaimCatalog
+  , selfInterpretEvidenceSchemaV1
   , trustBaseManifestClaimCatalog
   , trustBaseManifestEvidenceSchemaV1
+  , trustBaseBindingClaimCatalog
+  , trustBaseBindingEvidenceSchemaV1
   , validateEvidenceClaims
   ) where
 
@@ -71,6 +79,34 @@ fixedPointDiffEvidenceSchemaV1 =
     , schemaIdVersion = SchemaVersion 1
     }
 
+trustBaseBindingEvidenceSchemaV1 :: SchemaId
+trustBaseBindingEvidenceSchemaV1 =
+  SchemaId
+    { schemaIdName = SchemaName "trustbase-binding-evidence"
+    , schemaIdVersion = SchemaVersion 1
+    }
+
+promotionEvidenceSchemaV1 :: SchemaId
+promotionEvidenceSchemaV1 =
+  SchemaId
+    { schemaIdName = SchemaName "core-promotion-evidence"
+    , schemaIdVersion = SchemaVersion 1
+    }
+
+selfInterpretEvidenceSchemaV1 :: SchemaId
+selfInterpretEvidenceSchemaV1 =
+  SchemaId
+    { schemaIdName = SchemaName "core-self-interpret-evidence"
+    , schemaIdVersion = SchemaVersion 1
+    }
+
+sdkPackageEvidenceSchemaV1 :: SchemaId
+sdkPackageEvidenceSchemaV1 =
+  SchemaId
+    { schemaIdName = SchemaName "sdk-package-evidence"
+    , schemaIdVersion = SchemaVersion 1
+    }
+
 -- | This catalog retains the stable names for the pure manifest invariants.
 -- Operational artifact, executable, gate-command, and publication claims are
 -- deliberately outside the minimal TrustBase.
@@ -100,6 +136,93 @@ fixedPointDiffClaimCatalog =
         map fixedPointDiffClaimName fixedPointDiffKeys
     , claimCatalogManifestClaim =
         ClaimName "fixed-point-diff-claim-manifest"
+    }
+
+trustBaseBindingClaimCatalog :: ClaimCatalog
+trustBaseBindingClaimCatalog =
+  ClaimCatalog
+    { claimCatalogName = "trustbase-binding"
+    , claimCatalogCoreClaims =
+        map
+          ClaimName
+          [ "trustbase-ref-is-serializable"
+          , "trustbase-binding-is-explicit"
+          , "trustbase-artifact-digest-mismatch-rejected"
+          , "trustbase-manifest-digest-mismatch-rejected"
+          , "trustbase-core-id-mismatch-rejected"
+          , "trustbase-schema-mismatch-rejected"
+          , "trustbase-mismatch-precedes-runtime-load"
+          , "bound-trustbase-runs-bootstrap-round"
+          , "sdk-core-lock-is-explicit-and-serializable"
+          ]
+    , claimCatalogManifestClaim =
+        ClaimName "trustbase-binding-claim-manifest"
+    }
+selfInterpretClaimCatalog :: ClaimCatalog
+selfInterpretClaimCatalog =
+  ClaimCatalog
+    { claimCatalogName = "core-self-interpret"
+    , claimCatalogCoreClaims =
+        map
+          ClaimName
+          [ "previous-core-runs-candidate"
+          , "candidate-is-expressed-by-normal-facade"
+          , "candidate-runs-as-framework-business"
+          , "empty-business-closes-recursion"
+          , "empty-business-has-no-curde"
+          , "empty-business-has-no-handler"
+          , "empty-business-has-no-host-io"
+          , "trustbase-not-forwarded-to-terminal-business"
+          , "core0-core1-exchangeable"
+          , "candidate-has-no-previous-core-runtime-dependency"
+          , "previous-core-back-reference-negative-rejected"
+          , "semantic-fixed-point-passed"
+          ]
+    , claimCatalogManifestClaim =
+        ClaimName "core-self-interpret-claim-manifest"
+    }
+
+promotionClaimCatalog :: ClaimCatalog
+promotionClaimCatalog =
+  ClaimCatalog
+    { claimCatalogName = "core-promotion"
+    , claimCatalogCoreClaims =
+        map
+          ClaimName
+          [ "promotion-core-manifest-content-addressed"
+          , "promotion-core-manifest-roundtrip"
+          , "promotion-evidence-reports-validated"
+          , "promotion-evidence-digests-bound"
+          , "promotion-record-roundtrip"
+          , "promotion-previous-core-back-reference-rejected"
+          , "promotion-candidate-manifest-mismatch-rejected"
+          , "promotion-invalid-semantic-report-rejected"
+          , "promotion-pending-cannot-be-current"
+          , "promotion-approved-pointer-matches-candidate"
+          , "promotion-current-pointer-roundtrip"
+          ]
+    , claimCatalogManifestClaim =
+        ClaimName "core-promotion-claim-manifest"
+    }
+
+sdkPackageClaimCatalog :: ClaimCatalog
+sdkPackageClaimCatalog =
+  ClaimCatalog
+    { claimCatalogName = "sdk-package"
+    , claimCatalogCoreClaims =
+        map
+          ClaimName
+          [ "sdk-core-lock-valid"
+          , "sdk-surface-digest-tamper-blocked"
+          , "sdk-lowering-digest-tamper-blocked"
+          , "sdk-pending-core-rejected"
+          , "sdk-approved-artifact-digest-bound"
+          , "sdk-package-materialized"
+          , "sdk-package-verifies"
+          , "sdk-package-manifest-binds-core-lock"
+          ]
+    , claimCatalogManifestClaim =
+        ClaimName "sdk-package-claim-manifest"
     }
 
 schemaCatalogClaimCatalog :: [SchemaCatalogEntry] -> ClaimCatalog

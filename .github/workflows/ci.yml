@@ -1,0 +1,29 @@
+name: Release pre-gate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-pre-gate:
+    name: Release pre-gate
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install GHC and Stack
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.6.7'
+          enable-stack: true
+          stack-version: latest
+
+      - name: Run ordinary release gate
+        shell: pwsh
+        run: .\scripts\check-release.ps1

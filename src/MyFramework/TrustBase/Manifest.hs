@@ -16,7 +16,7 @@ import Data.List
   )
 
 import MyFramework.TrustBase.Types
-  ( ClaimName
+  ( ClaimName (..)
   , SchemaId (..)
   , SchemaName (..)
   , SchemaVersion (..)
@@ -62,6 +62,7 @@ data ManifestViolation
   | ManifestInvalidSchemas [SchemaCatalogEntry]
   | ManifestDuplicateSchemas [SchemaId]
   | ManifestSchemaCatalogMismatch [SchemaCatalogEntry] [SchemaCatalogEntry]
+  | ManifestInvalidClaims [ClaimName]
   | ManifestDuplicateClaims [ClaimName]
   | ManifestClaimCatalogMismatch [ClaimName] [ClaimName]
   deriving (Eq, Show)
@@ -178,13 +179,19 @@ validateManifest manifest observation =
           | otherwise = [ManifestSchemaCatalogMismatch expected observed]
 
     claimCatalogViolations =
-      duplicateViolation
+      invalidViolation
+        ++ duplicateViolation
         ++ driftViolation
       where
         expected =
           trustBaseManifestEvidenceClaims manifest
         observed =
           manifestObservedEvidenceClaims observation
+        invalid =
+          filter (null . unClaimName) expected
+        invalidViolation
+          | null invalid = []
+          | otherwise = [ManifestInvalidClaims invalid]
         duplicateViolation =
           case duplicates expected of
             [] -> []
