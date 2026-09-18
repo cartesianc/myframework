@@ -28,7 +28,7 @@
 
 | 阶段 | 交付内容 | 最小验证 |
 |---|---|---|
-| 1. 普通调用 | Free record、存在封装、handler 实例字典、bind 绑定的 impl | impl 调用类方法取得对应 effect 的依赖，各执行的参数与身份独立 |
+| 1. 普通调用 | EffectF GADT、effect 函数、公开 Effect record、handler 字典、bind 绑定的 impl | 合并入口对应内部 Free 构造；impl 取得对应依赖，各执行的参数与身份独立 |
 | 2. 值准备 | Read、Map、require、结果与等待协议 | 两路值汇入单一参数；input 仍只有一个 |
 | 3. 资源与错误 | scope、layer、线性关闭、X 范围 | 正常、失败、取消均按协议处理责任，错误按 scope 路由 |
 | 4. 控制与事件 | AST、loop、Hanging、执行共享 | 只执行选中分支，同次请求共享，新轮次重新执行 |
@@ -44,7 +44,8 @@
 
 这些内容保留思考空间，按已经确定的文件职责继续设计：
 
-- record 默认值、分类专用字段、handlers 取得类方法字典的原生 Haskell 接口。
+- 按 [CONSTRUCTION.md](CONSTRUCTION.md) 扩展完整 record 字段、分类专用内容及默认值。
+- handlers 取得类方法字典的原生 Haskell 接口。
 - 一个 effect 多组 handler 方法和多个 impl 的具体绑定形式。
 - 存在包、内部 EffectIO 调用环境及 impl 返回 effect 的封装接口。
 - 多 scope 要求、借用接口、关闭失败处理。

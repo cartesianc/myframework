@@ -1,6 +1,6 @@
 # Handler 与 impl：句柄解释和依赖注入
 
-本文件定义 [EFFECT.md](EFFECT.md) 中 handler 与 bind 的语义，以及类型类、存在封装和 impl 的配合方式。执行调度见 [INTERPRETER.md](INTERPRETER.md)。
+本文件定义 [EFFECT.md](EFFECT.md) 中 handler 与 bind 的语义，以及类型类、存在封装和 impl 的配合方式。Effect 的数据定义与构造入口见 [CONSTRUCTION.md](CONSTRUCTION.md)，执行调度见 [INTERPRETER.md](INTERPRETER.md)。
 
 ## 1. 三个角色
 
@@ -22,7 +22,7 @@
 
 ```haskell
 reportLoadError :: EffectChain
-reportLoadError = effect $ Effect
+reportLoadError = Effect
   { typing  = X
   , input   = loadText
   , require = noArgs
@@ -36,7 +36,7 @@ reportLoadError = effect $ Effect
   }
 ```
 
-handlers @ReportLoadError 表示取得该具体 effect 的类方法集合；bind 保存 reportImpl。help 的错误范围见 [RESOURCE.md](RESOURCE.md)。
+通过 Effect record 填写注册；handler 选择该 effect 的类方法集合，bind 填 reportImpl，help 指定 [RESOURCE.md](RESOURCE.md) 定义的错误范围。
 
 ### instance 解释类方法
 

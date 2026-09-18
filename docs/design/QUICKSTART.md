@@ -6,9 +6,9 @@
 
 | 功能 | 使用方式 |
 |---|---|
-| 注册业务操作 | 填写统一 effect record，通过 bind 绑定 impl |
+| 注册业务操作 | 填写 Effect record，通过 bind 绑定 impl |
 | 提供句柄 | 类型类声明 handler 方法，instance 为特定 effect 提供解释 |
-| 注入依赖 | impl 调用句柄，框架使用该 effect 携带的实例解释和调用环境 |
+| 使用依赖 | 在 impl 中调用句柄，使用已声明的参数和资源 |
 | 组合操作 | input 引用上游 effect，组合已有句柄 |
 | 准备参数 | require 声明参数，Read 取值，Map 转换 |
 | 组织模块 | AST 声明串行、并行、分支和监听 |
@@ -18,13 +18,13 @@
 
 ## 怎么用
 
-以读取文件文本为例。插件提供文件 scope 和具体 effect 的内部表示 LoadText；业务填写注册并绑定原子 IO 实现。
+以读取文件文本为例。插件提供文件 scope fileSession 和 effect 类型 LoadText；业务按下面的步骤注册、提供 instance 并编写 impl。
 
-### 1. 注册 effect，绑定 impl
+### 1. 直接填写 Effect record
 
 ```haskell
 loadText :: EffectChain
-loadText = effect $ Effect
+loadText = Effect
   { typing  = Excu
   , input   = fileSession
   , require = readRangeContract
@@ -37,7 +37,10 @@ loadText = effect $ Effect
   }
 ```
 
-handler 是 LoadText 的类型类句柄集合；handlers @LoadText 取得对应 instance 的类方法。bind 是原子 IO 实现 loadImpl 的绑定位置。effect 将具体表示、句柄字典和绑定打包为统一描述。
+- input 填上游 effect，layer 填所需文件 scope。
+- require 和 result 填参数与结果契约。
+- handler 通过 handlers @LoadText 选择句柄集合，bind 填绑定的 loadImpl。
+- once = False 采用常规使用约束，scope = noScope 将文件生命周期交由 fileSession 管理。
 
 ### 2. 为具体 effect 提供类方法解释
 
@@ -50,9 +53,9 @@ instance Execution LoadText where
     usingFile context upstream readTextIO
 ```
 
-execute 是 handler 句柄。这个 instance 为 LoadText 提供 ad-hoc 多态解释：从本次调用取得参数和文件能力，完成对应的读取操作。usingFile 和 currentEffect 是框架接口的示意名称。
+在 execute 中填写 LoadText 的读取行为。currentEffect 取得本次操作，usingFile 使用声明的文件能力调用 readTextIO。这些接口名称为目标 API 示意。
 
-### 3. impl 使用句柄，依赖随实例注入
+### 3. 编写已绑定的 impl
 
 ```haskell
 loadImpl :: Impl LoadText
@@ -60,7 +63,7 @@ loadImpl upstream =
   execute upstream
 ```
 
-loadImpl 是注册绑定的原子 IO 实现单位。upstream 是 input 指定的 effect；execute 使用 LoadText 的实例解释，返回本次目标 effect。框架负责传递实例字典、参数和 scope 使用入口。
+loadImpl 接收 input 指定的上游 effect，调用 execute 使用参数和文件能力，完成本次 LoadText 操作。将其填入注册的 bind 字段。
 
 ### 4. 准备值并组织 AST
 
@@ -87,4 +90,4 @@ main = interpreter ast effect
 - **log/show**：查看连接、状态、等待原因及本次采用的句柄解释和 impl。
 - **JSON 启动**：保存声明与插件标识，加载时恢复实例和绑定。
 
-原理见 [IMPL.md](IMPL.md)，完整设计见[文件关系](README.md)。
+完整文档见[目录与文件关系](README.md)。

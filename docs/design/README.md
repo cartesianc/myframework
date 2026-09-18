@@ -1,6 +1,6 @@
 # 设计目录
 
-这是 myframework 当前目标设计的唯一入口。设计整理日期：2026-09-18。
+这是 myframework 当前目标设计的唯一入口。设计整理日期：2026-09-19。
 
 **请优先阅读本目录理解最新设计。** 本目录描述目标架构和接口，已发布代码保留早期试验实现。本次发布范围为文档，源码和 core 记录保持各自的版本。
 
@@ -14,7 +14,8 @@ Effect 是可读的操作中间表示（IR）：用统一 record 声明操作和
 docs/design/
 ├── README.md          目录、文件关系、总约定
 ├── QUICKSTART.md      简版：有什么功能、怎么用
-├── EFFECT.md          注册 record、分类、身份、Free 表示
+├── EFFECT.md          注册字段、分类、身份与操作组合
+├── CONSTRUCTION.md    GADT 定义、effect 函数、合并入口原理
 ├── IMPL.md            handler、instance、存在封装、impl 依赖注入
 ├── AST.md             模块控制流、read/map/require 参数表达式
 ├── HANGING.md         回调、等待、监听与恢复
@@ -23,11 +24,12 @@ docs/design/
 └── IMPLEMENTATION.md  源码对应、实现顺序、尚未定稿的细节
 ```
 
-只想使用框架，读 [QUICKSTART.md](QUICKSTART.md)。完整设计按以下文件关系阅读；每个主题只在对应文件中定义。
+使用方式集中在 [QUICKSTART.md](QUICKSTART.md)，统一写 Effect { ... }。GADT 数据定义、effect 函数和合并入口的原理集中在 [CONSTRUCTION.md](CONSTRUCTION.md)。完整设计按以下文件关系阅读。
 
 | 文件 | 与其他文件的关系 |
 |---|---|
-| [EFFECT.md](EFFECT.md) | 定义公共 IR；handler 与 bind 的配合见 IMPL，scope/layer/once/help 的语义见 RESOURCE |
+| [EFFECT.md](EFFECT.md) | 定义公共 IR 字段与操作关系；构造见 CONSTRUCTION，handler/bind 见 IMPL，资源字段见 RESOURCE |
+| [CONSTRUCTION.md](CONSTRUCTION.md) | 定义 EffectF GADT、effect 函数和公开 Effect record 入口，承接 EFFECT 的字段及 IMPL 的类型关系 |
 | [IMPL.md](IMPL.md) | 定义类型类句柄、实例解释、存在封装和 impl；消费 AST 准备的参数及 RESOURCE 提供的能力 |
 | [AST.md](AST.md) | 引用 EFFECT 构造节点，并规定主控制树 |
 | [HANGING.md](HANGING.md) | 补充 AST 之外的事件入口，生命周期受 RESOURCE 约束 |
@@ -46,7 +48,7 @@ docs/design/
 | 模块的顺序、并行、选择、监听 | AST 与 Hanging |
 | 使用什么资源、由谁关闭 | layer、scope、线性 once |
 
-前台使用 Haskell record、函数和 instance。顺序固定为 **注册 handler 并绑定 impl → 为具体 effect 提供 instance → impl 使用句柄**。
+前台通过 Effect { ... } 填写注册，使用普通函数和 instance。顺序固定为 **注册 handler 并绑定 impl → 为具体 effect 提供 instance → impl 使用句柄**。
 
 handler 是类型类方法，instance 为具体 effect 提供 ad-hoc 解释，bind 指定实现函数。存在封装保存具体 effect 及其能力字典；impl 使用类方法时，依赖随该字典与调用环境注入。注册集合共享统一描述类型。
 
@@ -56,4 +58,4 @@ handler 是类型类方法，instance 为具体 effect 提供 ad-hoc 解释，bi
 main = interpreter ast effect
 ```
 
-这里的 effect 是注册集合；单条注册使用的 effect 构造函数位于注册模块。Hanging 随程序描述装配。main 只负责启动。
+这里的 effect 是注册集合；单条注册使用 Effect { ... }。内部 effect 构造函数的定义见 CONSTRUCTION。Hanging 随程序描述装配，main 只负责启动。

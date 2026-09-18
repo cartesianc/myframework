@@ -1,6 +1,6 @@
 # Effect：注册与操作 IR
 
-本文件定义公共描述。handler、bind 和依赖注入见 [IMPL.md](IMPL.md)，资源字段见 [RESOURCE.md](RESOURCE.md)，运行解释见 [INTERPRETER.md](INTERPRETER.md)。
+本文件定义公共描述的字段与语义。数据定义和构造原理见 [CONSTRUCTION.md](CONSTRUCTION.md)，handler、bind 和依赖注入见 [IMPL.md](IMPL.md)，资源字段见 [RESOURCE.md](RESOURCE.md)，运行解释见 [INTERPRETER.md](INTERPRETER.md)。
 
 ## 1. 一个统一 record
 
@@ -45,39 +45,13 @@ Pure 的语义由纯计算接口落实。分类专用内容由框架内部的 AD
 
 handler 的 instance 解释提供句柄能力，bind 确定执行哪个 impl。impl 使用类方法时，依赖随当前 effect 的能力字典和调用环境注入。连接关系由显式绑定确定，普通 Haskell 函数类型与类型类约束负责各自的接口关系。
 
-## 3. Free 统一递归表示
+## 3. 统一构造入口
 
-以下是注册封装完成后的框架内部结构，只展示递归位置与操作包：
+注册统一使用 Effect { ... }，其公共类型为 EffectChain。完整使用示例见 [QUICKSTART.md](QUICKSTART.md)。
 
-```haskell
-data CoreEffectF next = EffectF
-  { input     :: next
-  , operation :: SomeOperation
-  }
+内部以 EffectF GADT 保存单层描述，CoreEffect 封装具体 effect 的类方法字典与 impl，effect 函数添加 Free 层。对外的记录式模式同义词 Effect 合并构造与包装两步。
 
-instance Functor CoreEffectF where
-  fmap f (EffectF upstream operation) =
-    EffectF (f upstream) operation
-
-type EffectChain = Free CoreEffectF ()
-
-end :: EffectChain
-end = pure ()
-```
-
-SomeOperation 是内部存在包，保存具体 effect 表示、分类与契约、handler 能力字典及 bind 指定的 impl。前台 effect 构造函数将填好的 record 封装为一层操作包，再放入 Free 描述。
-
-表示遵循以下规则：
-
-- input 是递归位置，完整 EffectChain 闭合递归。
-- operation 的封装类型固定，fmap 只映射 input，内部方法和 impl 保留各自的调用类型。
-- () 表示描述端点；业务结果由运行时管理。Free 的 Pure 构造器表示端点，业务 Pure 分类表示纯计算。
-- Free 的 bind，即 >>=，替换端点以组合描述；record 的 bind 字段指定 impl 函数。
-- input 朝向上游。折叠先构造执行计划，再按分类和依赖状态驱动所需操作。
-- scope、layer、help 等关联保存可解析引用；拥有者与关闭者通过引用相连。
-- Free 描述可共享；执行身份、共享调用、资源所有权和控制循环由后端管理。
-
-Free 提供统一递归与描述组合，执行器提供调度、资源和模块工具能力。接口依据见 [Control.Monad.Free](https://hackage-content.haskell.org/package/free-5.2/docs/src/Control.Monad.Free.html)。
+[CONSTRUCTION.md](CONSTRUCTION.md) 给出数据定义、Functor、effect 函数及公开入口的定义，并说明存在类型、Free 和字段扩展的关系。
 
 ## 4. 身份与存在封装
 
