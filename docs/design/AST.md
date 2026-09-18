@@ -1,6 +1,6 @@
 # AST：模块控制流与业务值
 
-节点引用 [EFFECT.md](EFFECT.md) 中的注册；参数准备完成后交给 [IMPL.md](IMPL.md) 的绑定函数。AST 之外的事件入口见 [HANGING.md](HANGING.md)，运行规则见 [INTERPRETER.md](INTERPRETER.md)。
+节点引用 [EFFECT.md](EFFECT.md) 中的注册；参数准备完成后交给 bind 指定的 [impl](IMPL.md)，供其通过 handler 句柄使用。AST 之外的事件入口见 [HANGING.md](HANGING.md)，运行规则见 [INTERPRETER.md](INTERPRETER.md)。
 
 ## 1. 用分支划分模块
 
@@ -26,7 +26,7 @@ type Workflow = Fix WorkflowF
 | either / Choose | 根据条件只执行选中的分支 |
 | loop | 监听事件或变化，建立新的执行轮次 |
 
-AST 是控制树；节点之间的 input、值和 scope 引用可以形成图。模块父子关系不能代替资源所有权或业务值依赖。
+AST 是控制树，模块父子关系表达控制归属；input、值和 scope 引用分别形成操作组合、业务值和资源关系。
 
 ## 2. 在节点上显式准备值
 
@@ -40,11 +40,11 @@ readRequest 和 buildReadRange 分别引用已注册的 Read、Map effect。组�
 
 多个来源可以组合成一个参数 ADT，例如起始位置和长度汇成 ReadRange。input 仍只表达上游句柄组合。无参数节点归一化为空参数表达式，便捷写法待定。
 
-result 字段描述结果契约，Read 读取的是对应执行实际产生的结果；pending 不是空结果，失败也不是成功值。
+result 字段描述结果契约，Read 读取对应执行实际产生的结果；pending 表示等待，failed 携带失败信息，succeeded 表示成功完成。
 
 ## 3. 惰性与等待分别实现
 
-Haskell 惰性求值允许先构造、按需解释表达式。异步 IO、等待和唤醒仍由解释器调度；原生 $ 的右结合不会自动提供异步执行。
+Haskell 惰性求值允许先构造、按需解释表达式。原生 $ 表达右结合的函数应用；解释器负责异步 IO、等待和唤醒。
 
 节点只有在参数、控制条件和所需能力满足时才启动。等待期间后端保留等待原因，并在来源完成后恢复。
 
@@ -54,6 +54,6 @@ Haskell 惰性求值允许先构造、按需解释表达式。异步 IO、等待
 
 cata 将递归结构折叠为可调度计划；ana 可用于从种子展开结构。二者描述结构变换，实际事件循环和资源生命周期由运行时管理。
 
-fold 必须保留延迟执行边界：未选中分支不运行 IO，loop 不在建树时无限展开。按执行身份共享同次上游调用，新监听轮次则创建新身份。
+fold 保留延迟执行边界：解释器只运行选中的分支，并在事件到达时展开 loop 的下一轮。按执行身份共享同次上游调用，新监听轮次则创建新身份。
 
 parallel 的失败传播与取消策略、loop 的变化判定与重入策略，以及流式参数的就绪粒度仍待确定。实现时先明确这些策略，再固定表面组合子。

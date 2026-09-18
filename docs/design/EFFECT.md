@@ -1,25 +1,28 @@
 # Effect：注册与操作 IR
 
-本文件定义公共描述。绑定函数见 [IMPL.md](IMPL.md)，资源字段见 [RESOURCE.md](RESOURCE.md)，运行解释见 [INTERPRETER.md](INTERPRETER.md)。
+本文件定义公共描述。handler、bind 和依赖注入见 [IMPL.md](IMPL.md)，资源字段见 [RESOURCE.md](RESOURCE.md)，运行解释见 [INTERPRETER.md](INTERPRETER.md)。
 
 ## 1. 一个统一 record
 
-每个注册都是一个具体业务操作，但共用 EffectChain。名称、分类、配置和绑定区分注册，不为每个注册建立独立递归 newtype。
+每个注册表达一个具体业务操作，公共类型统一为 EffectChain。名称、分类、配置、句柄解释和 impl 绑定共同确定其含义。具体 effect 的表示与能力字典保存在内部存在包中。
 
 | 字段 | 含义 |
 |---|---|
-| 注册身份 | 注册集合提供稳定键；源码变量名便于阅读，不能自动成为运行时身份 |
+| 注册身份 | 注册集合提供的稳定键；源码变量名服务于阅读 |
 | typing | Excu、Pure、Read、X、Map、Close |
 | input | 唯一上游操作描述；根操作使用 end |
-| require | 所需业务参数的契约；无参数时为空参数契约 |
-| handler | 注册时显式绑定的 impl 函数 |
+| require | 所需业务参数的契约；无参数时使用空参数契约 |
+| handler | 类型类为具体 effect 提供的句柄方法集合，通过 instance 获得解释 |
+| bind | 注册显式绑定的 impl；外部操作的 impl 是使用句柄的原子 IO 实现单位 |
 | result | 业务结果的契约 |
 | once | 对操作或资源责任的线性要求 |
 | scope | 资源拥有者关联的 Close effect；默认无 |
 | layer | 对 scope 能力的要求，关联实际 effect 引用 |
 | help | X 专用的错误处理目标；当前基线是资源拥有者的 scope |
 
-require/result 是描述业务 ADT 的契约值。状态、已经产生的结果和活资源保存在运行时，不写回共享的静态 record。一次调用的 impl 外层返回 effect 表示，业务结果再由 Read 提供给消费者。
+例如 handler = handlers @LoadText 选择 LoadText 的类方法集合，bind = loadImpl 绑定具体函数。构造 effect 时，框架封装具体表示、类型类字典及 impl，供解释器按本次执行使用。
+
+require/result 是描述业务 ADT 的契约值。状态、业务结果和活资源保存在运行时。impl 以 input effect 为输入，并在调用环境中返回本次目标 effect；Read 将业务结果提供给消费者。
 
 分类决定专用字段和句柄能力：
 
@@ -32,63 +35,61 @@ require/result 是描述业务 ADT 的契约值。状态、已经产生的结果
 | Map / m | 转换、组合业务值，为 require 准备参数 |
 | Close / c | 结束 scope，释放其资源 |
 
-这些是框架的操作分类。Pure 分类必须由实际纯接口支持，单靠标签不能保证纯度。分类专用内容可由内部 ADT、GADT 或 associated data family 组织；前台保持统一注册写法，不暴露内部类型机制。
+Pure 的语义由纯计算接口落实。分类专用内容由框架内部的 ADT、GADT 或 associated data family 组织，业务通过统一 record 使用这些能力。
 
 ## 2. input 是句柄组合
 
-单一 input 表达由底层向上层组成操作的描述链，例如 C (B A)。它不承担业务值传递；多个值来源通过 AST 的 Read/Map 汇入 require。
+单一 input 表达由底层向上层组成操作的描述链，例如 C (B A)。多个业务值来源通过 AST 的 Read/Map 汇入 require。
 
-上游可以已经是一个复合操作。业务配置或绑定发生变化时，增加或调整注册值即可，避免为 A1、A2 等配置变体创建大量类型。
+上游可以已经是一个复合操作。业务配置或绑定发生变化时，通过注册值表达变体，同一具体 effect 表示及其 instance 可以复用。
 
-handler 在 record 中直接绑定函数。连接关系由显式绑定确定，不额外要求为每条连接编写类型索引或身份证明。普通 Haskell 函数类型与类型类约束仍然适用。
+handler 的 instance 解释提供句柄能力，bind 确定执行哪个 impl。impl 使用类方法时，依赖随当前 effect 的能力字典和调用环境注入。连接关系由显式绑定确定，普通 Haskell 函数类型与类型类约束负责各自的接口关系。
 
 ## 3. Free 统一递归表示
 
-以下是框架内部的最小结构，只展示递归位置与绑定：
+以下是注册封装完成后的框架内部结构，只展示递归位置与操作包：
 
 ```haskell
-data CoreEffectF next = Effect
-  { input   :: next
-  , handler :: Impl
+data CoreEffectF next = EffectF
+  { input     :: next
+  , operation :: SomeOperation
   }
 
 instance Functor CoreEffectF where
-  fmap f (Effect upstream impl) =
-    Effect (f upstream) impl
+  fmap f (EffectF upstream operation) =
+    EffectF (f upstream) operation
 
 type EffectChain = Free CoreEffectF ()
-
-effect :: CoreEffectF EffectChain -> EffectChain
-effect = Free
 
 end :: EffectChain
 end = pure ()
 ```
 
-实际单层 record 还包含前述分类、契约、身份和资源字段。业务通过 effect 包装已经填好 input 的一层描述；这里使用 Free 构造器，与 liftF 自动添加端点的用途不同。
+SomeOperation 是内部存在包，保存具体 effect 表示、分类与契约、handler 能力字典及 bind 指定的 impl。前台 effect 构造函数将填好的 record 封装为一层操作包，再放入 Free 描述。
 
-实现必须保留以下语义：
+表示遵循以下规则：
 
-- input 是递归位置，完整 EffectChain 闭合递归；不能仅凭“有递归”就推出任意结构都是 Free。
-- handler 使用固定的 Impl 类型。若写成 next → self，next 同时出现在函数入参位置，会破坏上述 Functor 映射。
-- () 是描述端点；业务结果不放在这个端点。Free 的 Pure 构造器也不同于业务 Pure 分类。
-- Free 的 bind 替换端点，用于组合描述；业务值传递仍走 Read/Map/require。
-- input 朝向上游。直接在普通 foldFree 中先执行当前层，不能自动得到上游优先语义；应折叠出执行计划，再按需要驱动。
-- scope、layer、help 等关联使用可解析的引用，避免把资源拥有者和关闭者的互相引用展开成无限树。
-- Free 描述可以共享；执行身份、共享调用、资源所有权和控制循环由后端管理。
+- input 是递归位置，完整 EffectChain 闭合递归。
+- operation 的封装类型固定，fmap 只映射 input，内部方法和 impl 保留各自的调用类型。
+- () 表示描述端点；业务结果由运行时管理。Free 的 Pure 构造器表示端点，业务 Pure 分类表示纯计算。
+- Free 的 bind，即 >>=，替换端点以组合描述；record 的 bind 字段指定 impl 函数。
+- input 朝向上游。折叠先构造执行计划，再按分类和依赖状态驱动所需操作。
+- scope、layer、help 等关联保存可解析引用；拥有者与关闭者通过引用相连。
+- Free 描述可共享；执行身份、共享调用、资源所有权和控制循环由后端管理。
 
-Free 减少手写递归包装，不自动提供调度、线性资源、序列化函数或 VM 工具能力。接口依据见 [Control.Monad.Free](https://hackage-content.haskell.org/package/free-5.2/docs/src/Control.Monad.Free.html)。
+Free 提供统一递归与描述组合，执行器提供调度、资源和模块工具能力。接口依据见 [Control.Monad.Free](https://hackage-content.haskell.org/package/free-5.2/docs/src/Control.Monad.Free.html)。
 
-## 4. 三种身份分别保存
+## 4. 身份与存在封装
 
-| 身份 | 用途 |
+| 内容 | 用途 |
 |---|---|
-| 注册身份 | 标识静态操作及显式绑定 |
-| 执行身份 | 区分同一注册的不同调用、监听轮次、压测请求 |
+| 具体 effect 类型与字典 | 确定类方法的 ad-hoc 解释，由存在包保存 |
+| 注册身份 | 标识静态操作、handler 解释和 impl 绑定 |
+| 执行身份 | 标识具体调用、监听轮次或压测请求 |
 | scope 身份 | 标识本次资源拥有者及其有效范围 |
 
-AST 模块路径补充执行位置。引用、诊断和结果读取都使用足够的身份信息，不能仅凭 Haskell 类型名或共享描述的地址推断一次执行。
+AST 模块路径补充执行位置。引用、诊断、依赖注入和结果读取均携带对应身份；同一实例解释可以服务多份注册和多次执行。
 
 ## 5. 保留的设计方向
 
-同一 IR 同时服务代码阅读、架构文档、配置启动和模块定位。原子句柄可以组合为更大的操作，而 scope 限制可使用的能力范围。类型层面的封装集中在框架和插件内部，业务主要填写声明、绑定实现和组合模块。
+同一 IR 同时服务代码阅读、架构文档、配置启动和模块定位。原子句柄组合成更大的操作，scope 限定可使用的能力范围。内部类型机制承接分类、存在封装和字典传递，业务主要填写声明、提供 instance、绑定 impl 和组合模块。

@@ -1,10 +1,10 @@
 # myframework
 
-**文档与当前发布代码不一致，请优先阅读文档。** 本次只更新设计文档；已发布代码仍是旧试验版，尚未实现最新设计。理解架构和计划用法，以 `docs/design/` 为准；实际可运行能力以对应版本的源码为准。
+**请优先阅读文档理解最新设计。** `docs/design/` 描述目标架构和计划用法，已发布代码保留早期试验实现。两者处于各自的演进阶段，实际可运行能力以对应版本的源码为准。
 
 以可读 Effect IR、Haskell EDSL 和递归 AST 为基础的声明式函数式架构。
 
-注册 effect 时绑定 impl，类型类方法提供句柄，AST 组织模块控制流，interpreter 统一执行。模块后端面向监听、mock、stress 和 log/show。
+handler 是类型类为具体 effect 提供的句柄方法，instance 给出 ad-hoc 解释。注册通过 bind 绑定 impl，impl 调用句柄时获得依赖注入；AST 组织模块控制流，interpreter 统一执行。模块后端面向监听、mock、stress 和 log/show。
 
 ```haskell
 main = interpreter ast effect

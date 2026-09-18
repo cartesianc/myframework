@@ -1,26 +1,26 @@
 # 简版：有什么功能，怎么用
 
-**文档与当前发布代码不一致，请优先按本文理解最新用法。** 以下是目标 API 的伪代码，尚不能直接用于旧版代码。已发布试验版的运行命令见 [IMPLEMENTATION.md](IMPLEMENTATION.md)。
+**请优先阅读文档理解最新设计。** 文档描述目标架构，已发布代码保留早期试验实现。以下是目标 API 的伪代码，旧版运行命令见 [IMPLEMENTATION.md](IMPLEMENTATION.md)。
 
 ## 有什么功能
 
 | 功能 | 使用方式 |
 |---|---|
-| 注册业务操作 | 填写统一 effect record，直接绑定 impl |
+| 注册业务操作 | 填写统一 effect record，通过 bind 绑定 impl |
+| 提供句柄 | 类型类声明 handler 方法，instance 为特定 effect 提供解释 |
+| 注入依赖 | impl 调用句柄，框架使用该 effect 携带的实例解释和调用环境 |
 | 组合操作 | input 引用上游 effect，组合已有句柄 |
-| 准备业务参数 | require 声明参数，Read 取值，Map 转换 |
-| 替换具体实现 | 类型类 instance 提供句柄解释，impl 选择使用 |
+| 准备参数 | require 声明参数，Read 取值，Map 转换 |
 | 组织模块 | AST 声明串行、并行、分支和监听 |
 | 管理资源和错误 | layer 要求资源，scope 管关闭，once 要求线性释放，X 处理指定范围的错误 |
-| 接入回调和等待 | 注册 Hanging，由后端恢复执行 |
-| 观察和测试模块 | 按模块监听、mock、stress、log/show |
-| 配置启动 | 保存声明为 JSON，加载时绑定已编译插件 |
+| 观察和测试 | 按模块监听、mock、stress、log/show |
+| 配置启动 | 保存声明为 JSON，加载时装配已编译的 effect 实例与 impl |
 
 ## 怎么用
 
-以“在文件 scope 中读取文本”为例。假设插件已提供 fileSession、FileBackend 及读文件原子操作；业务提供读取范围和文本结果的契约值。
+以读取文件文本为例。插件提供文件 scope 和具体 effect 的内部表示 LoadText；业务填写注册并绑定原子 IO 实现。
 
-### 1. 注册 effect，当场绑定 impl
+### 1. 注册 effect，绑定 impl
 
 ```haskell
 loadText :: EffectChain
@@ -28,7 +28,8 @@ loadText = effect $ Effect
   { typing  = Excu
   , input   = fileSession
   , require = readRangeContract
-  , handler = loadImpl
+  , handler = handlers @LoadText
+  , bind    = loadImpl
   , once    = False
   , scope   = noScope
   , layer   = need fileSession
@@ -36,56 +37,54 @@ loadText = effect $ Effect
   }
 ```
 
-input 组合文件操作，layer 要求文件 scope。handler 现在就绑定函数，函数体写在后面。
+handler 是 LoadText 的类型类句柄集合；handlers @LoadText 取得对应 instance 的类方法。bind 是原子 IO 实现 loadImpl 的绑定位置。effect 将具体表示、句柄字典和绑定打包为统一描述。
 
-### 2. 提供类型类句柄的解释
-
-框架声明能力类；插件通过 instance 实现。如果已有适合的插件，直接使用它。
+### 2. 为具体 effect 提供类方法解释
 
 ```haskell
-instance Execution FileBackend where
-  execute backend binding upstream =
-    external backend binding upstream readTextIO
+instance Effect 'Excu LoadText
+
+instance Execution LoadText where
+  execute upstream = do
+    LoadText context <- currentEffect
+    usingFile context upstream readTextIO
 ```
 
-execute 是句柄算子；readTextIO 是宿主原子操作。这里的组合子构造待执行操作。
+execute 是 handler 句柄。这个 instance 为 LoadText 提供 ad-hoc 多态解释：从本次调用取得参数和文件能力，完成对应的读取操作。usingFile 和 currentEffect 是框架接口的示意名称。
 
-### 3. 编写已经绑定的 impl
+### 3. impl 使用句柄，依赖随实例注入
 
 ```haskell
-loadImpl :: Impl
-loadImpl binding upstream =
-  execute fileBackend binding upstream
+loadImpl :: Impl LoadText
+loadImpl upstream =
+  execute upstream
 ```
 
-binding 由框架提供，携带本次目标和已准备参数。upstream 是注册里的 input；返回的是本次 loadText 的操作表示。
+loadImpl 是注册绑定的原子 IO 实现单位。upstream 是 input 指定的 effect；execute 使用 LoadText 的实例解释，返回本次目标 effect。框架负责传递实例字典、参数和 scope 使用入口。
 
-### 4. 在 AST 节点上准备值
+### 4. 准备值并组织 AST
 
-假设 readRequest、buildReadRange 分别引用已注册的 Read、Map effect：
+readRequest、buildReadRange 分别引用已注册的 Read、Map effect：
 
 ```haskell
 node loadText $ mapped buildReadRange $ readFrom readRequest
 ```
 
-用 chained、parallel、either、loop 组织这些节点成为 ast。参数和资源就绪后，解释器才执行对应操作。
+用 chained、parallel、either、loop 组织节点。参数与资源就绪后，解释器运行绑定的 impl。回调、等待和事件恢复通过 Hanging 接入。
 
-### 5. 装配并启动
+### 5. 启动并使用模块后端
 
-将注册放入 effect 集合，把控制树命名为 ast；入口模块写：
+将注册集合命名为 effect，控制树命名为 ast：
 
 ```haskell
 main = interpreter ast effect
 ```
 
-文件 scope 退出时，由它绑定的 Close effect 释放资源；业务读写节点通过 layer 使用该 scope。
-
-### 6. 从模块后端观察和测试
-
+- **资源关闭**：scope 退出时运行 Close effect 绑定的 impl，关闭句柄消费释放责任。
 - **监听**：选择模块，订阅开始、等待、完成、失败和关闭事件。
-- **mock**：给一个运行场景配置替代 impl 绑定。
-- **stress**：设置模块、输入、重复次数和并发度，发起独立调用。
-- **log/show**：按模块查看声明关系、状态、等待原因、耗时和实际实现。
-- **JSON 启动**：保存声明及实现标识，加载器从插件恢复绑定后启动。
+- **mock**：为运行场景选择句柄解释和 impl 绑定。
+- **stress**：设置模块、输入、重复次数和并发度。
+- **log/show**：查看连接、状态、等待原因及本次采用的句柄解释和 impl。
+- **JSON 启动**：保存声明与插件标识，加载时恢复实例和绑定。
 
-完整规则按[目录中的文件关系](README.md)查阅。
+原理见 [IMPL.md](IMPL.md)，完整设计见[文件关系](README.md)。
