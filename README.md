@@ -1,72 +1,21 @@
 # myframework
 
-`myframework` is the source repository for the CURDE framework compiler and
-runtime.
+**文档与当前发布代码不一致，请优先阅读文档。** 本次只更新设计文档；已发布代码仍是旧试验版，尚未实现最新设计。理解架构和计划用法，以 `docs/design/` 为准；实际可运行能力以对应版本的源码为准。
 
-The repository has exactly three visible authoring surfaces:
+以可读 Effect IR、Haskell EDSL 和递归 AST 为基础的声明式函数式架构。
 
-1. Effect System: serializable CURDE handle and value declarations.
-2. AST: serializable boot roots and control structure.
-3. Handler: typed runtime implementations outside the serializable frontend.
+注册 effect 时绑定 impl，类型类方法提供句柄，AST 组织模块控制流，interpreter 统一执行。模块后端面向监听、mock、stress 和 log/show。
 
-The internal AST is recursive and its static projections use a catamorphism.
-The runtime interprets the same control nodes without lowering them to the
-legacy pipeline executor.
-
-`ana`, `hylo`, and other unfold/refold schemes are intentionally deferred until
-the JSON-RPC boot framework needs a protocol-driven unfolding boundary.
-
-## Repository boundaries
-
-- `myframework` is the semantic source.
-- `dsl-bootstrap` is a migration reference and behavioral oracle.
-- `dsl-sdk` is generated output. It is never edited as a semantic source.
-- TrustBase contracts migrate as pure schema, evidence, manifest, and
-  fixed-point validation code. Release promotion is a separate operation.
-
-## Current self-bootstrap status
-
-The implementation now contains both required fixed points:
-
-- `core0 -> FrameworkAsBusiness -> EmptyBusiness` semantic self-interpretation;
-- Stage1/Stage2 source and evidence reproducibility.
-
-`TrustBaseRef`, existential `BoundTrustBase`, the closed `HostKernel`, explicit
-promotion records, current-core pointers, approved-core SDK locks, and a
-standalone `sdk-lower` package materializer are part of the same source
-closure. Focused semantic, binding, promotion, and SDK package witnesses must
-all pass before release validation starts.
-
-Promotion is still deliberately separate from validation. A candidate is not
-the current core until the heavy self-artifact gate passes and a maintainer
-explicitly approves its pending promotion record. Only that approved core may
-feed the beta SDK workflow. Ordinary architecture changes, including the AST
-execution-boundary work in the current worktree, invalidate previous source
-digests and are not promoted merely because local semantic witnesses pass.
-
-The repository current pointer now selects the explicitly approved `core1`;
-the retained `core0` manifest is archival/rollback evidence and is not an
-active runtime dependency.
-
-## Build policy
-
-Development batches related semantic changes before compiling. Focused
-semantic evidence is added with the implementation, but expensive release and
-self-artifact promotion gates are not part of ordinary iteration.
-
-```powershell
-stack --work-dir .stack-work-codex build
-stack --work-dir .stack-work-codex exec curde-semantics-witness
-stack --work-dir .stack-work-codex exec curde-runtime-witness
-.\scripts\check-ast-execution-boundary.ps1
+```haskell
+main = interpreter ast effect
 ```
 
-See `docs/ARCHITECTURE.md` for the frozen semantic boundary.
+## 文档
 
-The approved-core SDK lowering boundary is documented in
-`docs/SDK_SOURCE_ARTIFACT.md`. It consumes the existing erased CURDE and AST
-configuration values, binds their canonical surface to `SdkCoreLock`, and
-materializes a standalone source package; it is not another authoring facade.
+- [简版：有什么功能，怎么用](docs/design/QUICKSTART.md)
+- [完整设计：目录与文件关系](docs/design/README.md)
+- [代码差异、运行命令与实现计划](docs/design/IMPLEMENTATION.md)
 
-The runtime compiler/executor boundary is documented in `docs/RUNTIME.md`.
-It consumes a validated lowering result and is not another authoring facade.
+最新设计统一放在 `docs/design/`。文中的 API 是目标写法；当前源码仍是早期试验实现。
+
+现有 core 与发布证据的维护说明见 [trustbase/README.md](trustbase/README.md)。
